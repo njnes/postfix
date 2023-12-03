@@ -172,8 +172,10 @@
 /*	on the same MTA. Larger sites would have to share the
 /*	\fBpostscreen\fR(8) cache between primary and backup MTAs,
 /*	which would introduce a common point of failure.
-/* .IP "\fBpostscreen_whitelist_interfaces (static:all)\fR"
-/*	Renamed to postscreen_allowlist_interfaces in Postfix 3.6.
+/* .IP "\fBpostscreen_allowlist_interfaces (static:all)\fR"
+/*	A list of local \fBpostscreen\fR(8) server IP addresses where a
+/*	non-allowlisted remote SMTP client can obtain \fBpostscreen\fR(8)'s temporary
+/*	allowlist status.
 /* BEFORE 220 GREETING TESTS
 /* .ad
 /* .fi
@@ -190,11 +192,12 @@
 /*	with the postscreen_dnsbl_sites and postscreen_dnsbl_threshold
 /*	parameters).
 /* .IP "\fBpostscreen_dnsbl_reply_map (empty)\fR"
-/*	A mapping from actual DNSBL domain name which includes a secret
+/*	A mapping from an actual DNSBL domain name which includes a secret
 /*	password, to the DNSBL domain name that postscreen will reply with
 /*	when it rejects mail.
 /* .IP "\fBpostscreen_dnsbl_sites (empty)\fR"
-/*	Optional list of DNS allow/denylist domains, filters and weight
+/*	Optional list of patterns with DNS allow/denylist domains, filters
+/*	and weight
 /*	factors.
 /* .IP "\fBpostscreen_dnsbl_threshold (1)\fR"
 /*	The inclusive lower bound for blocking a remote SMTP client, based on
@@ -288,25 +291,29 @@
 /*	The amount of time that \fBpostscreen\fR(8) will cache an expired
 /*	temporary allowlist entry before it is removed.
 /* .IP "\fBpostscreen_bare_newline_ttl (30d)\fR"
-/*	The amount of time that \fBpostscreen\fR(8) will use the result from
-/*	a successful "bare newline" SMTP protocol test.
+/*	The amount of time that \fBpostscreen\fR(8) remembers that a client
+/*	IP address passed a "bare newline" SMTP protocol test, before it
+/*	address is required to pass that test again.
 /* .IP "\fBpostscreen_dnsbl_max_ttl (${postscreen_dnsbl_ttl?{$postscreen_dnsbl_ttl}:{1}}h)\fR"
-/*	The maximum amount of time that \fBpostscreen\fR(8) will use the
-/*	result from a successful DNS-based reputation test before a
-/*	client IP address is required to pass that test again.
+/*	The maximum amount of time that \fBpostscreen\fR(8) remembers that a
+/*	client IP address passed a DNS-based reputation test, before it is
+/*	required to pass that test again.
 /* .IP "\fBpostscreen_dnsbl_min_ttl (60s)\fR"
-/*	The minimum amount of time that \fBpostscreen\fR(8) will use the
-/*	result from a successful DNS-based reputation test before a
-/*	client IP address is required to pass that test again.
+/*	The minimum amount of time that \fBpostscreen\fR(8) remembers that a
+/*	client IP address passed a DNS-based reputation test, before it
+/*	is required to pass that test again.
 /* .IP "\fBpostscreen_greet_ttl (1d)\fR"
-/*	The amount of time that \fBpostscreen\fR(8) will use the result from
-/*	a successful PREGREET test.
+/*	The amount of time that \fBpostscreen\fR(8) remembers that a client
+/*	IP address passed a PREGREET test, before it is required to pass
+/*	that test again.
 /* .IP "\fBpostscreen_non_smtp_command_ttl (30d)\fR"
-/*	The amount of time that \fBpostscreen\fR(8) will use the result from
-/*	a successful "non_smtp_command" SMTP protocol test.
+/*	The amount of time that \fBpostscreen\fR(8) remembers that a client
+/*	IP address passed a "non_smtp_command" SMTP protocol test, before
+/*	it is required to pass that test again.
 /* .IP "\fBpostscreen_pipelining_ttl (30d)\fR"
-/*	The amount of time that \fBpostscreen\fR(8) will use the result from
-/*	a successful "pipelining" SMTP protocol test.
+/*	The amount of time that \fBpostscreen\fR(8) remembers that a client
+/*	IP address passed a "pipelining" SMTP protocol test, before it is
+/*	required to pass that test again.
 /* RESOURCE CONTROLS
 /* .ad
 /* .fi
@@ -1174,7 +1181,7 @@ int     main(int argc, char **argv)
 	0,
     };
     static const CONFIG_INT_TABLE int_table[] = {
-	VAR_PSC_DNSBL_THRESH, DEF_PSC_DNSBL_THRESH, &var_psc_dnsbl_thresh, 0, 0,
+	VAR_PSC_DNSBL_THRESH, DEF_PSC_DNSBL_THRESH, &var_psc_dnsbl_thresh, 1, 0,
 	VAR_PSC_CMD_COUNT, DEF_PSC_CMD_COUNT, &var_psc_cmd_count, 1, 0,
 	VAR_SMTPD_CCONN_LIMIT, DEF_SMTPD_CCONN_LIMIT, &var_smtpd_cconn_limit, 0, 0,
 	0,

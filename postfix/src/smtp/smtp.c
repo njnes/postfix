@@ -146,6 +146,7 @@
 /*	RFC 2046 (MIME: Media Types)
 /*	RFC 2554 (AUTH command)
 /*	RFC 2821 (SMTP protocol)
+/*	RFC 2782 (SRV resource records)
 /*	RFC 2920 (SMTP Pipelining)
 /*	RFC 3207 (STARTTLS command)
 /*	RFC 3461 (SMTP DSN Extension)
@@ -352,6 +353,17 @@
 /*	DATA requests, when deadlines are enabled with smtp_per_request_deadline.
 /* .IP "\fBheader_from_format (standard)\fR"
 /*	The format of the Postfix-generated \fBFrom:\fR header.
+/* .PP
+/*	Available in Postfix version 3.8 and later:
+/* .IP "\fBuse_srv_lookup (empty)\fR"
+/*	Enables discovery for the specified service(s) using DNS SRV
+/*	records.
+/* .IP "\fBignore_srv_lookup_error (no)\fR"
+/*	When SRV record lookup fails, fall back to MX or IP address
+/*	lookup as if SRV record lookup was not enabled.
+/* .IP "\fBallow_srv_lookup_fallback (no)\fR"
+/*	When SRV record lookup fails or no SRV record exists, fall back
+/*	to MX or IP address lookup as if SRV record lookup was not enabled.
 /* MIME PROCESSING CONTROLS
 /* .ad
 /* .fi
@@ -420,6 +432,11 @@
 /* .IP "\fBsmtp_send_dummy_mail_auth (no)\fR"
 /*	Whether or not to append the "AUTH=<>" option to the MAIL
 /*	FROM command in SASL-authenticated SMTP sessions.
+/* .PP
+/*	Available in Postfix version 3.9 and later:
+/* .IP "\fBsmtp_sasl_password_result_delimiter (:)\fR"
+/*	The delimiter between username and password in sasl_passwd_maps lookup
+/*	results.
 /* STARTTLS SUPPORT CONTROLS
 /* .ad
 /* .fi
@@ -494,13 +511,15 @@
 /*	The OpenSSL cipherlist for "high" grade ciphers.
 /* .IP "\fBtls_medium_cipherlist (see 'postconf -d' output)\fR"
 /*	The OpenSSL cipherlist for "medium" or higher grade ciphers.
+/* .IP "\fBtls_null_cipherlist (eNULL:!aNULL)\fR"
+/*	The OpenSSL cipherlist for "NULL" grade ciphers that provide
+/*	authentication without encryption.
+/* .PP
+/*	Available in in Postfix version 2.3..3.7:
 /* .IP "\fBtls_low_cipherlist (see 'postconf -d' output)\fR"
 /*	The OpenSSL cipherlist for "low" or higher grade ciphers.
 /* .IP "\fBtls_export_cipherlist (see 'postconf -d' output)\fR"
 /*	The OpenSSL cipherlist for "export" or higher grade ciphers.
-/* .IP "\fBtls_null_cipherlist (eNULL:!aNULL)\fR"
-/*	The OpenSSL cipherlist for "NULL" grade ciphers that provide
-/*	authentication without encryption.
 /* .PP
 /*	Available in Postfix version 2.4 and later:
 /* .IP "\fBsmtp_sasl_tls_verified_security_options ($smtp_sasl_tls_security_options)\fR"
@@ -518,7 +537,7 @@
 /*	certificate fingerprints.
 /* .PP
 /*	Available in Postfix version 2.6 and later:
-/* .IP "\fBsmtp_tls_protocols (see postconf -d output)\fR"
+/* .IP "\fBsmtp_tls_protocols (see 'postconf -d' output)\fR"
 /*	TLS protocols that the Postfix SMTP client will use with
 /*	opportunistic TLS encryption.
 /* .IP "\fBsmtp_tls_ciphers (medium)\fR"
@@ -567,6 +586,11 @@
 /*	nexthop destination security level is \fBdane\fR, but the MX
 /*	record was found via an "insecure" MX lookup.
 /* .PP
+/*	Available in Postfix version 3.2 and later:
+/* .IP "\fBtls_eecdh_auto_curves (see 'postconf -d' output)\fR"
+/*	The prioritized list of elliptic curves supported by the Postfix
+/*	SMTP client and server.
+/* .PP
 /*	Available in Postfix version 3.4 and later:
 /* .IP "\fBsmtp_tls_connection_reuse (no)\fR"
 /*	Try to make multiple deliveries per TLS-encrypted connection.
@@ -581,6 +605,24 @@
 /* .IP "\fBtls_fast_shutdown_enable (yes)\fR"
 /*	A workaround for implementations that hang Postfix while shutting
 /*	down a TLS session, until Postfix times out.
+/* .PP
+/*	Available in Postfix version 3.8 and later:
+/* .IP "\fBtls_ffdhe_auto_groups (see 'postconf -d' output)\fR"
+/*	The prioritized list of finite-field Diffie-Hellman ephemeral
+/*	(FFDHE) key exchange groups supported by the Postfix SMTP client and
+/*	server.
+/* .PP
+/*	Available in Postfix 3.9, 3.8.1, 3.7.6, 3.6.10, 3.5.20 and later:
+/* .IP "\fBtls_config_file (default)\fR"
+/*	Optional configuration file with baseline OpenSSL settings.
+/* .IP "\fBtls_config_name (empty)\fR"
+/*	The application name passed by Postfix to OpenSSL library
+/*	initialization functions.
+/* .PP
+/*	Available in Postfix version 3.9 and later:
+/* .IP "\fBsmtp_tls_enable_rpk (no)\fR"
+/*	Request that remote SMTP servers send an RFC7250 raw public key
+/*	instead of an X.509 certificate.
 /* OBSOLETE STARTTLS CONTROLS
 /* .ad
 /* .fi
@@ -767,9 +809,9 @@
 /* .IP "\fBdisable_dns_lookups (no)\fR"
 /*	Disable DNS lookups in the Postfix SMTP and LMTP clients.
 /* .IP "\fBinet_interfaces (all)\fR"
-/*	The network interface addresses that this mail system receives
-/*	mail on.
-/* .IP "\fBinet_protocols (see 'postconf -d output')\fR"
+/*	The local network interface addresses that this mail system
+/*	receives mail on.
+/* .IP "\fBinet_protocols (see 'postconf -d' output)\fR"
 /*	The Internet protocols Postfix will attempt to use when making
 /*	or accepting connections.
 /* .IP "\fBipc_timeout (3600s)\fR"
@@ -793,7 +835,7 @@
 /* .IP "\fBprocess_name (read-only)\fR"
 /*	The process name of a Postfix command or daemon process.
 /* .IP "\fBproxy_interfaces (empty)\fR"
-/*	The network interface addresses that this mail system receives mail
+/*	The remote network interface addresses that this mail system receives mail
 /*	on by way of a proxy or network address translation unit.
 /* .IP "\fBsmtp_address_preference (any)\fR"
 /*	The address type ("ipv6", "ipv4" or "any") that the Postfix
@@ -827,8 +869,9 @@
 /* .PP
 /*	Available with Postfix 2.3 and later:
 /* .IP "\fBsmtp_fallback_relay ($fallback_relay)\fR"
-/*	Optional list of relay hosts for SMTP destinations that can't be
-/*	found or that are unreachable.
+/*	Optional list of relay destinations that will be used when an
+/*	SMTP destination is not found, or when delivery fails due to a
+/*	non-permanent error.
 /* .PP
 /*	Available with Postfix 3.0 and later:
 /* .IP "\fBsmtp_address_verify_target (rcpt)\fR"
@@ -987,6 +1030,7 @@ int     var_smtp_never_ehlo;
 char   *var_smtp_sasl_opts;
 char   *var_smtp_sasl_path;
 char   *var_smtp_sasl_passwd;
+char   *var_smtp_sasl_passwd_res_delim;
 bool    var_smtp_sasl_enable;
 char   *var_smtp_sasl_mechs;
 char   *var_smtp_sasl_type;
@@ -1057,6 +1101,7 @@ char   *var_smtp_tls_sni;
 bool    var_smtp_tls_blk_early_mail_reply;
 bool    var_smtp_tls_force_tlsa;
 char   *var_smtp_tls_insecure_mx_policy;
+bool    var_smtp_tls_enable_rpk;
 
 #endif
 
@@ -1083,6 +1128,9 @@ char   *var_smtp_dns_re_filter;
 bool    var_smtp_balance_inet_proto;
 bool    var_smtp_req_deadline;
 int     var_smtp_min_data_rate;
+char   *var_use_srv_lookup;
+bool    var_ign_srv_lookup_err;
+bool    var_allow_srv_fallback;
 
  /* Special handling of 535 AUTH errors. */
 char   *var_smtp_sasl_auth_cache_name;
@@ -1109,6 +1157,7 @@ HBC_CHECKS *smtp_header_checks;		/* limited header checks */
 HBC_CHECKS *smtp_body_checks;		/* limited body checks */
 SMTP_CLI_ATTR smtp_cli_attr;		/* parsed command-line */
 int     smtp_hfrom_format;		/* postmaster notifications */
+STRING_LIST *smtp_use_srv_lookup;
 
 #ifdef USE_TLS
 
@@ -1399,6 +1448,14 @@ static void post_init(char *unused_name, char **argv)
      * header_from format, for postmaster notifications.
      */
     smtp_hfrom_format = hfrom_format_parse(VAR_HFROM_FORMAT, var_hfrom_format);
+
+    /*
+     * Service discovery with SRV record lookup.
+     */
+    if (*var_use_srv_lookup)
+	smtp_use_srv_lookup = string_list_init(VAR_USE_SRV_LOOKUP,
+					       MATCH_FLAG_RETURN,
+					       var_use_srv_lookup);
 }
 
 /* pre_init - pre-jail initialization */
@@ -1539,16 +1596,13 @@ static void pre_init(char *unused_name, char **unused_argv)
     /*
      * Header/body checks.
      */
-#define MAPS_OR_NULL(name, value) \
-	(*(value) ? maps_create((name), (value), DICT_FLAG_LOCK) : (MAPS *) 0)
-
     smtp_header_checks = hbc_header_checks_create(
-		 MAPS_OR_NULL(VAR_LMTP_SMTP(HEAD_CHKS), var_smtp_head_chks),
-		 MAPS_OR_NULL(VAR_LMTP_SMTP(MIME_CHKS), var_smtp_mime_chks),
-		 MAPS_OR_NULL(VAR_LMTP_SMTP(NEST_CHKS), var_smtp_nest_chks),
+			       VAR_LMTP_SMTP(HEAD_CHKS), var_smtp_head_chks,
+			       VAR_LMTP_SMTP(MIME_CHKS), var_smtp_mime_chks,
+			       VAR_LMTP_SMTP(NEST_CHKS), var_smtp_nest_chks,
 						  smtp_hbc_callbacks);
     smtp_body_checks = hbc_body_checks_create(
-		 MAPS_OR_NULL(VAR_LMTP_SMTP(BODY_CHKS), var_smtp_body_chks),
+			       VAR_LMTP_SMTP(BODY_CHKS), var_smtp_body_chks,
 					      smtp_hbc_callbacks);
 
     /*

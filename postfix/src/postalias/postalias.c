@@ -264,6 +264,7 @@
 #include <set_eugid.h>
 #include <warn_stat.h>
 #include <clean_env.h>
+#include <dict_db.h>
 
 /* Global library. */
 
@@ -272,7 +273,6 @@
 #include <mail_dict.h>
 #include <mail_params.h>
 #include <mail_version.h>
-#include <mkmap.h>
 #include <mail_task.h>
 #include <dict_proxy.h>
 #include <mail_parm_split.h>
@@ -343,6 +343,24 @@ static void postalias(char *map_type, char *path_name, int postalias_flags,
 	set_eugid(st.st_uid, st.st_gid);
 
     /*
+     * Override the default per-table cache size for DB map (re)builds. We
+     * can't do this in the mkmap* functions because those don't have access
+     * to Postfix parameter settings.
+     * 
+     * db_cache_size" is defined in util/dict_open.c and defaults to 128kB,
+     * which works well for the lookup code.
+     * 
+     * We use a larger per-table cache when building ".db" files. For "hash"
+     * files performance degrades rapidly unless the memory pool is O(file
+     * size).
+     * 
+     * For "btree" files performance is good with sorted input even for small
+     * memory pools, but with random input degrades rapidly unless the memory
+     * pool is O(file size).
+     */
+    dict_db_cache_size = var_db_create_buf;
+
+    /*
      * Open the database, create it when it does not exist, truncate it when
      * it does exist, and lock out any spectators.
      */
@@ -375,7 +393,7 @@ static void postalias(char *map_type, char *path_name, int postalias_flags,
 	     */
 	    if ((mkmap->dict->flags & DICT_FLAG_UTF8_ACTIVE)
 		&& !allascii(STR(line_buffer))
-		&& !valid_utf8_string(STR(line_buffer), LEN(line_buffer))) {
+		&& !valid_utf8_stringz(STR(line_buffer))) {
 		msg_warn("%s, line %d: non-UTF-8 input \"%s\""
 			 " -- ignoring this line",
 			 VSTREAM_PATH(source_fp), lineno, STR(line_buffer));

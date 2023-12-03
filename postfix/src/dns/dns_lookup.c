@@ -85,6 +85,12 @@
 /*	an invalid name is reported as a DNS_INVAL result, while
 /*	malformed replies are reported as transient errors.
 /*
+/*	Note: in dns_lookup*() results and queries, a name may start
+/*	with a "*" label, which is valid according to RFC 1034
+/*	section 4.3.3. Such a name will not pass valid_hostname()
+/*	checks in the rest of Postfix, because it is not a valid
+/*	host or domain name.
+/*
 /*	dns_get_h_errno() returns the last error. This deprecates
 /*	usage of the global h_errno variable. We should not rely
 /*	on that being updated.
@@ -234,6 +240,10 @@
 /*	Google, Inc.
 /*	111 8th Avenue
 /*	New York, NY 10011, USA
+/*
+/*	SRV Support by
+/*	Tomas Korbar
+/*	Red Hat, Inc.
 /*--*/
 
 /* System library. */
@@ -295,8 +305,8 @@ typedef struct DNS_REPLY {
 #define INET6_ADDR_LEN	16		/* XXX */
 
  /*
-  * Use the threadsafe resolver API if available, not because it is theadsafe,
-  * but because it has more functionality.
+  * Use the threadsafe resolver API if available, not because it is
+  * theadsafe, but because it has more functionality.
   */
 #ifdef USE_RES_NCALLS
 static struct __res_state dns_res_state;
@@ -706,7 +716,7 @@ static int valid_rr_name(const char *name, const char *location,
     if (valid_hostaddr(name, DONT_GRIPE)) {
 	result = PASS_NAME;
 	gripe = "numeric domain name";
-    } else if (!valid_hostname(name, DO_GRIPE)) {
+    } else if (!valid_hostname(name, DO_GRIPE | DO_WILDCARD)) {
 	result = REJECT_NAME;
 	gripe = "malformed domain name";
     } else {
@@ -740,6 +750,8 @@ static int dns_get_rr(DNS_RR **list, const char *orig_name, DNS_REPLY *reply,
     int     comp_len;
     ssize_t data_len;
     unsigned pref = 0;
+    unsigned weight = 0;
+    unsigned port = 0;
     unsigned char *src;
     unsigned char *dst;
     int     ch;
@@ -761,6 +773,18 @@ static int dns_get_rr(DNS_RR **list, const char *orig_name, DNS_REPLY *reply,
     case T_PTR:
 	if (dn_expand(reply->buf, reply->end, pos, temp, sizeof(temp)) < 0)
 	    return (DNS_RETRY);
+	if (!valid_rr_name(temp, "resource data", fixed->type, reply))
+	    return (DNS_INVAL);
+	data_len = strlen(temp) + 1;
+	break;
+    case T_SRV:
+	GETSHORT(pref, pos);
+	GETSHORT(weight, pos);
+	GETSHORT(port, pos);
+	if (dn_expand(reply->buf, reply->end, pos, temp, sizeof(temp)) < 0)
+	    return (DNS_RETRY);
+	if (*temp == 0)
+	    return (DNS_NULLSRV);
 	if (!valid_rr_name(temp, "resource data", fixed->type, reply))
 	    return (DNS_INVAL);
 	data_len = strlen(temp) + 1;
@@ -860,7 +884,7 @@ static int dns_get_rr(DNS_RR **list, const char *orig_name, DNS_REPLY *reply,
 	break;
     }
     *list = dns_rr_create(orig_name, rr_name, fixed->type, fixed->class,
-			  fixed->ttl, pref, tempbuf, data_len);
+			  fixed->ttl, pref, weight, port, tempbuf, data_len);
     return (DNS_OK);
 }
 
@@ -960,7 +984,7 @@ static int dns_get_answer(const char *orig_name, DNS_REPLY *reply, int type,
 		    resource_found++;
 		    rr->dnssec_valid = *maybe_secure ? reply->dnssec_ad : 0;
 		    *rrlist = dns_rr_append(*rrlist, rr);
-		} else if (status == DNS_NULLMX) {
+		} else if (status == DNS_NULLMX || status == DNS_NULLSRV) {
 		    CORRUPT(status);		/* TODO: use better name */
 		} else if (not_found_status != DNS_RETRY)
 		    not_found_status = status;
@@ -1027,7 +1051,7 @@ int     dns_lookup_x(const char *name, unsigned type, unsigned flags,
     /*
      * The Linux resolver misbehaves when given an invalid domain name.
      */
-    if (strcmp(name, ".") && !valid_hostname(name, DONT_GRIPE)) {
+    if (strcmp(name, ".") && !valid_hostname(name, DONT_GRIPE | DO_WILDCARD)) {
 	if (why)
 	    vstring_sprintf(why,
 		   "Name service error for %s: invalid host or domain name",
@@ -1091,6 +1115,12 @@ int     dns_lookup_x(const char *name, unsigned type, unsigned flags,
 	case DNS_NULLMX:
 	    if (why)
 		vstring_sprintf(why, "Domain %s does not accept mail (nullMX)",
+				name);
+	    DNS_SET_H_ERRNO(&dns_res_state, NO_DATA);
+	    return (status);
+	case DNS_NULLSRV:
+	    if (why)
+		vstring_sprintf(why, "Domain %s does not support SRV requests",
 				name);
 	    DNS_SET_H_ERRNO(&dns_res_state, NO_DATA);
 	    return (status);

@@ -67,7 +67,7 @@
 /*	The default location of the Postfix main.cf and master.cf
 /*	configuration files.
 /* .IP "\fBimport_environment (see 'postconf -d' output)\fR"
-/*	The list of environment parameters that a privileged Postfix
+/*	The list of environment variables that a privileged Postfix
 /*	process will import from a non-Postfix parent process, or name=value
 /*	environment overrides.
 /* .IP "\fBsyslog_facility (mail)\fR"
@@ -82,6 +82,12 @@
 /*	\fBpostlogd\fR(8) service.
 /* .IP "\fBpostlog_service_name (postlog)\fR"
 /*	The name of the \fBpostlogd\fR(8) service entry in master.cf.
+/* .PP
+/*	Available in Postfix 3.9 and later:
+/* .IP "\fBmaillog_file_permissions (0600)\fR"
+/*	The file access permissions that will be set when the file
+/*	$maillog_file is created for the first time, or when the file is
+/*	created after an existing file is rotated.
 /* SEE ALSO
 /*	postconf(5), configuration parameters
 /*	postlogd(8), Postfix logging
@@ -267,8 +273,7 @@ int     main(int argc, char **argv)
      */
     argv[0] = POSTLOG_CMD;
     tag = mail_task(argv[0]);
-    if (isatty(STDERR_FILENO))
-	msg_vstream_init(tag, VSTREAM_ERR);
+    msg_vstream_init(tag, VSTREAM_ERR);
     maillog_client_init(tag, MAILLOG_CLIENT_FLAG_LOGWRITER_FALLBACK);
 
     /*

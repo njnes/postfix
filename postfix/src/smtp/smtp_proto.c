@@ -929,6 +929,7 @@ static int smtp_start_tls(SMTP_STATE *state)
 	TLS_PROXY_CLIENT_START_PROPS(&start_props,
 				     timeout = var_smtp_starttls_tmout,
 				     tls_level = state->tls->level,
+				     enable_rpk = state->tls->enable_rpk,
 				     nexthop = session->tls_nexthop,
 				     host = STR(iter->host),
 				     namaddr = session->namaddrport,
@@ -1051,6 +1052,7 @@ static int smtp_start_tls(SMTP_STATE *state)
 			     fd = -1,
 			     timeout = var_smtp_starttls_tmout,
 			     tls_level = state->tls->level,
+			     enable_rpk = state->tls->enable_rpk,
 			     nexthop = session->tls_nexthop,
 			     host = STR(iter->host),
 			     namaddr = session->namaddrport,
@@ -1146,10 +1148,10 @@ static void smtp_hbc_logger(void *context, const char *action,
     const SMTP_STATE *state = (SMTP_STATE *) context;
 
     if (*text) {
-	msg_info("%s: %s: %s %.60s: %s",
+	msg_info("%s: %s: %s %.200s: %s",
 		 state->request->queue_id, action, where, content, text);
     } else {
-	msg_info("%s: %s: %s %.60s",
+	msg_info("%s: %s: %s %.200s",
 		 state->request->queue_id, action, where, content);
     }
 }

@@ -74,7 +74,8 @@ poor delivery performance of all other mail.
 Re\-read configuration files. Running processes terminate at their
 earliest convenience.
 .IP \fBstatus\fR
-Indicate if the Postfix mail system is currently running.
+Indicate if the Postfix mail system is currently running
+(zero exit status) or stopped (non\-zero exit status).
 .IP "\fBset\-permissions\fR [\fIname\fR=\fIvalue ...\fR]"
 Set the ownership and permissions of Postfix related files and
 directories, as specified in the \fBpostfix\-files\fR file.
@@ -316,7 +317,7 @@ postfix\-wrapper(5), Postfix multi\-instance API
 
 Table\-driven mechanisms:
 access(5), Postfix SMTP access control table
-aliases(5), Postfix alias database
+aliases(5), Postfix local aliasing
 canonical(5), Postfix input address rewriting
 generic(5), Postfix output address rewriting
 header_checks(5), body_checks(5), Postfix content inspection

@@ -74,10 +74,6 @@
 /*	The OpenSSL cipherlist for "high" grade ciphers.
 /* .IP "\fBtls_medium_cipherlist (see 'postconf -d' output)\fR"
 /*	The OpenSSL cipherlist for "medium" or higher grade ciphers.
-/* .IP "\fBtls_low_cipherlist (see 'postconf -d' output)\fR"
-/*	The OpenSSL cipherlist for "low" or higher grade ciphers.
-/* .IP "\fBtls_export_cipherlist (see 'postconf -d' output)\fR"
-/*	The OpenSSL cipherlist for "export" or higher grade ciphers.
 /* .IP "\fBtls_null_cipherlist (eNULL:!aNULL)\fR"
 /*	The OpenSSL cipherlist for "NULL" grade ciphers that provide
 /*	authentication without encryption.
@@ -95,6 +91,12 @@
 /*	With SSLv3 and later, use the Postfix SMTP server's cipher
 /*	preference order instead of the remote client's cipher preference
 /*	order.
+/* .PP
+/*	Available in Postfix version 2.8..3.7:
+/* .IP "\fBtls_low_cipherlist (see 'postconf -d' output)\fR"
+/*	The OpenSSL cipherlist for "low" or higher grade ciphers.
+/* .IP "\fBtls_export_cipherlist (see 'postconf -d' output)\fR"
+/*	The OpenSSL cipherlist for "export" or higher grade ciphers.
 /* .PP
 /*	Available in Postfix version 2.9 and later:
 /* .IP "\fBtls_legacy_public_key_fingerprints (no)\fR"
@@ -134,6 +136,19 @@
 /* .IP "\fBtls_fast_shutdown_enable (yes)\fR"
 /*	A workaround for implementations that hang Postfix while shutting
 /*	down a TLS session, until Postfix times out.
+/* .PP
+/*	Available in Postfix version 3.8 and later:
+/* .IP "\fBtls_ffdhe_auto_groups (see 'postconf -d' output)\fR"
+/*	The prioritized list of finite-field Diffie-Hellman ephemeral
+/*	(FFDHE) key exchange groups supported by the Postfix SMTP client and
+/*	server.
+/* .PP
+/*	Available in Postfix 3.9, 3.8.1, 3.7.6, 3.6.10, 3.5.20 and later:
+/* .IP "\fBtls_config_file (default)\fR"
+/*	Optional configuration file with baseline OpenSSL settings.
+/* .IP "\fBtls_config_name (empty)\fR"
+/*	The application name passed by Postfix to OpenSSL library
+/*	initialization functions.
 /* STARTTLS SERVER CONTROLS
 /* .ad
 /* .fi
@@ -222,6 +237,12 @@
 /* .IP "\fBtlsproxy_tls_chain_files ($smtpd_tls_chain_files)\fR"
 /*	Files with the Postfix \fBtlsproxy\fR(8) server keys and certificate
 /*	chains in PEM format.
+/* .PP
+/*	Available in Postfix version 3.9 and later:
+/* .IP "\fBtlsproxy_tls_enable_rpk ($smtpd_tls_enable_rpk)\fR"
+/*	Request that remote SMTP clients send an RFC7250 raw public key
+/*	instead of an X.509 certificate, when asking or requiring client
+/*	authentication.
 /* STARTTLS CLIENT CONTROLS
 /* .ad
 /* .fi
@@ -421,6 +442,7 @@ bool    var_smtpd_use_tls;
 bool    var_smtpd_enforce_tls;
 bool    var_smtpd_tls_ask_ccert;
 bool    var_smtpd_tls_req_ccert;
+bool    var_smtpd_tls_enable_rpk;
 bool    var_smtpd_tls_set_sessid;
 char   *var_smtpd_relay_ccerts;
 char   *var_smtpd_tls_chain_files;
@@ -450,6 +472,7 @@ bool    var_tlsp_use_tls;
 bool    var_tlsp_enforce_tls;
 bool    var_tlsp_tls_ask_ccert;
 bool    var_tlsp_tls_req_ccert;
+bool    var_tlsp_tls_enable_rpk;
 bool    var_tlsp_tls_set_sessid;
 char   *var_tlsp_tls_chain_files;
 char   *var_tlsp_tls_cert_file;
@@ -1066,6 +1089,7 @@ static int tlsp_server_start_pre_handshake(TLSP_STATE *state)
 			 timeout = 0,		/* unused */
 			 requirecert = (var_tlsp_tls_req_ccert
 					&& var_tlsp_enforce_tls),
+			 enable_rpk = var_tlsp_tls_enable_rpk,
 			 serverid = state->server_id,
 			 namaddr = state->remote_endpt,
 			 cipher_grade = cipher_grade,
@@ -1812,6 +1836,7 @@ int     main(int argc, char **argv)
 	VAR_SMTPD_ENFORCE_TLS, DEF_SMTPD_ENFORCE_TLS, &var_smtpd_enforce_tls,
 	VAR_SMTPD_TLS_ACERT, DEF_SMTPD_TLS_ACERT, &var_smtpd_tls_ask_ccert,
 	VAR_SMTPD_TLS_RCERT, DEF_SMTPD_TLS_RCERT, &var_smtpd_tls_req_ccert,
+	VAR_SMTPD_TLS_ENABLE_RPK, DEF_SMTPD_TLS_ENABLE_RPK, &var_smtpd_tls_enable_rpk,
 	VAR_SMTPD_TLS_SET_SESSID, DEF_SMTPD_TLS_SET_SESSID, &var_smtpd_tls_set_sessid,
 	VAR_SMTP_USE_TLS, DEF_SMTP_USE_TLS, &var_smtp_use_tls,
 	VAR_SMTP_ENFORCE_TLS, DEF_SMTP_ENFORCE_TLS, &var_smtp_enforce_tls,
@@ -1822,6 +1847,7 @@ int     main(int argc, char **argv)
 	VAR_TLSP_ENFORCE_TLS, DEF_TLSP_ENFORCE_TLS, &var_tlsp_enforce_tls,
 	VAR_TLSP_TLS_ACERT, DEF_TLSP_TLS_ACERT, &var_tlsp_tls_ask_ccert,
 	VAR_TLSP_TLS_RCERT, DEF_TLSP_TLS_RCERT, &var_tlsp_tls_req_ccert,
+	VAR_TLSP_TLS_ENABLE_RPK, DEF_TLSP_TLS_ENABLE_RPK, &var_tlsp_tls_enable_rpk,
 	VAR_TLSP_TLS_SET_SESSID, DEF_TLSP_TLS_SET_SESSID, &var_tlsp_tls_set_sessid,
 	VAR_TLSP_CLNT_USE_TLS, DEF_TLSP_CLNT_USE_TLS, &var_tlsp_clnt_use_tls,
 	VAR_TLSP_CLNT_ENFORCE_TLS, DEF_TLSP_CLNT_ENFORCE_TLS, &var_tlsp_clnt_enforce_tls,

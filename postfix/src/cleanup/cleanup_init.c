@@ -174,6 +174,7 @@ int     var_auto_8bit_enc_hdr;		/* auto-detect 8bit encoding header */
 int     var_always_add_hdrs;		/* always add missing headers */
 int     var_virt_addrlen_limit;		/* stop exponential growth */
 char   *var_hfrom_format;		/* header_from_format */
+int     var_force_mime_iconv;		/* force mime downgrade on input */
 
 const CONFIG_INT_TABLE cleanup_int_table[] = {
     VAR_HOPCOUNT_LIMIT, DEF_HOPCOUNT_LIMIT, &var_hopcount_limit, 1, 0,
@@ -190,6 +191,7 @@ const CONFIG_BOOL_TABLE cleanup_bool_table[] = {
     VAR_VERP_BOUNCE_OFF, DEF_VERP_BOUNCE_OFF, &var_verp_bounce_off,
     VAR_AUTO_8BIT_ENC_HDR, DEF_AUTO_8BIT_ENC_HDR, &var_auto_8bit_enc_hdr,
     VAR_ALWAYS_ADD_HDRS, DEF_ALWAYS_ADD_HDRS, &var_always_add_hdrs,
+    VAR_FORCE_MIME_ICONV, DEF_FORCE_MIME_ICONV, &var_force_mime_iconv,
     0,
 };
 
@@ -278,7 +280,6 @@ int     cleanup_ext_prop_mask;
  /*
   * Milter support.
   */
-MAPS   *cleanup_milt_head_checks;
 MILTERS *cleanup_milters;
 
  /*
@@ -412,10 +413,6 @@ void    cleanup_pre_jail(char *unused_name, char **unused_argv)
 	    maps_create(VAR_RCPT_BCC_MAPS, var_rcpt_bcc_maps,
 			DICT_FLAG_LOCK | DICT_FLAG_FOLD_FIX
 			| DICT_FLAG_UTF8_REQUEST);
-    if (*var_milt_head_checks)
-	cleanup_milt_head_checks =
-	    maps_create(VAR_MILT_HEAD_CHECKS, var_milt_head_checks,
-			DICT_FLAG_LOCK);
     if (*var_cleanup_milters)
 	cleanup_milters = milter_create(var_cleanup_milters,
 					var_milt_conn_time,
@@ -432,6 +429,8 @@ void    cleanup_pre_jail(char *unused_name, char **unused_argv)
 					var_milt_eod_macros,
 					var_milt_unk_macros,
 					var_milt_macro_deflts);
+    if (*var_milt_head_checks)
+	cleanup_milter_header_checks_init();
 
     flush_init();
 }

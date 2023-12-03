@@ -241,7 +241,7 @@ cd
 chmod
 config
 defs
-egrep
+grep -E
 ifdef
 init
 libexec
@@ -1182,7 +1182,6 @@ Nexthop
 OP
 OTIFY
 OpenSSL's
-Postix
 Pt
 SECG
 SSLEAY
@@ -1563,3 +1562,28 @@ postlogd
 proxied
 raf
 fnvz
+hc
+mkmap
+Brendel
+Bugfix
+https
+egrep
+fgrep
+SRV
+EPL
+FFDHE
+Korbar
+ffdhe
+srv
+stderr
+charset
+latin
+utf
+mb
+SPKI
+certificate's
+pubout
+rpk
+sni
+Amawalk
+resychronization

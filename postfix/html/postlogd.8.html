@@ -2,6 +2,7 @@
         "http://www.w3.org/TR/html4/loose.dtd">
 <html> <head>
 <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<link rel='stylesheet' type='text/css' href='postfix-doc.css'>
 <title> Postfix manual - postlogd(8) </title>
 </head> <body> <pre>
 POSTLOGD(8)                                                        POSTLOGD(8)
@@ -66,6 +67,13 @@ POSTLOGD(8)                                                        POSTLOGD(8)
        <b><a href="postconf.5.html#postlogd_watchdog_timeout">postlogd_watchdog_timeout</a> (10s)</b>
               How  much  time  a  <a href="postlogd.8.html"><b>postlogd</b>(8)</a>  process  may  take to process a
               request before it is terminated by a built-in watchdog timer.
+
+       Available in Postfix 3.9 and later:
+
+       <b><a href="postconf.5.html#maillog_file_permissions">maillog_file_permissions</a> (0600)</b>
+              The file access permissions that  will  be  set  when  the  file
+              $<a href="postconf.5.html#maillog_file">maillog_file</a> is created for the first time, or when the file is
+              created after an existing file is rotated.
 
 <b>SEE ALSO</b>
        <a href="postconf.5.html">postconf(5)</a>, configuration parameters

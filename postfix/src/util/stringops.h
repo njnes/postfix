@@ -31,7 +31,14 @@ extern char *concatenate(const char *,...);
 extern char *mystrtok(char **, const char *);
 extern char *mystrtokq(char **, const char *, const char *);
 extern char *mystrtokdq(char **, const char *);
+extern char *mystrtok_cw(char **, const char *, const char *);
+extern char *mystrtokq_cw(char **, const char *, const char *, const char *);
+extern char *mystrtokdq_cw(char **, const char *, const char *);
 extern char *translit(char *, const char *, const char *);
+
+#define mystrtok(cp, sp) mystrtok_cw((cp), (sp), (char *) 0)
+#define mystrtokq(cp, sp, pp) mystrtokq_cw((cp), (sp), (pp), (char *) 0)
+#define mystrtokdq(cp, sp) mystrtokdq_cw((cp), (sp), (char *) 0)
 
 #define printable(string, replacement) \
 	printable_except((string), (replacement), (char *) 0)
@@ -53,6 +60,7 @@ extern int allascii_len(const char *, ssize_t);
 extern const char *WARN_UNUSED_RESULT split_nameval(char *, char **, char **);
 extern const char *WARN_UNUSED_RESULT split_qnameval(char *, char **, char **);
 extern int valid_utf8_string(const char *, ssize_t);
+extern int valid_utf8_stringz(const char *);
 extern size_t balpar(const char *, const char *);
 extern char *WARN_UNUSED_RESULT extpar(char **, const char *, int);
 extern int strcasecmp_utf8x(int, const char *, const char *);

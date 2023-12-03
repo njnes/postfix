@@ -2,6 +2,7 @@
         "http://www.w3.org/TR/html4/loose.dtd">
 <html> <head>
 <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<link rel='stylesheet' type='text/css' href='postfix-doc.css'>
 <title> Postfix manual - postlog(1) </title>
 </head> <body> <pre>
 POSTLOG(1)                                                          POSTLOG(1)
@@ -69,7 +70,7 @@ POSTLOG(1)                                                          POSTLOG(1)
               figuration files.
 
        <b><a href="postconf.5.html#import_environment">import_environment</a> (see 'postconf -d' output)</b>
-              The list of environment parameters  that  a  privileged  Postfix
+              The list of environment  variables  that  a  privileged  Postfix
               process  will  import  from  a  non-Postfix  parent  process, or
               name=value environment overrides.
 
@@ -88,6 +89,13 @@ POSTLOG(1)                                                          POSTLOG(1)
 
        <b><a href="postconf.5.html#postlog_service_name">postlog_service_name</a> (postlog)</b>
               The name of the <a href="postlogd.8.html"><b>postlogd</b>(8)</a> service entry in <a href="master.5.html">master.cf</a>.
+
+       Available in Postfix 3.9 and later:
+
+       <b><a href="postconf.5.html#maillog_file_permissions">maillog_file_permissions</a> (0600)</b>
+              The file access permissions that  will  be  set  when  the  file
+              $<a href="postconf.5.html#maillog_file">maillog_file</a> is created for the first time, or when the file is
+              created after an existing file is rotated.
 
 <b>SEE ALSO</b>
        <a href="postconf.5.html">postconf(5)</a>, configuration parameters

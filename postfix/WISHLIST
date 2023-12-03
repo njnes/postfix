@@ -6,32 +6,136 @@ Wish list:
 
 	Disable -DSNAPSHOT and -DNONPROD in makedefs.
 
-	postscreen_dnsbl_sites is evaluated in the reverse order, breaking
-	expectations when different reply patterns have different weights.
-	We need a compatibility_level feature to correct this.
+	postfix-install should mention makedefs.out.
 
-	In the pgsql: client, make the client encoding configurable
-	with a sensible default (UTF8). This code is implemented
-	and needs to be tested.
+	Propagate information about parsed daemon command-line
+	options to service callback functions. With this, a proxywrite
+	server can enforce a process limit of 1 without duplicating
+	libmaster's command-line parsing code.
+
+	Add a pre-release check for '.' instead of ','. Generalize
+	from grep '[a-zA-Z0-9]\.  *[a-z]' proto/*|egrep -v
+	'i\.e\.|etc\.|e\.g\.|\.  *[a-zA-Z0-9]*\('
+
+	Update DKIM examples for signing with the benefits of forced
+	MIME converison with "force_mime_input_conversion = yes"
+ 
+	Deprecate permit_mx_backup. It is fundamentally incompatible
+	with recipient address validation. There is no way to fix that:
+	reject_unverified_recipient requires that the domain is reachable,
+	and in that case, permit_mx_backup is not needed.
+
+	Scan Postfix code with github.com/googleprojectzero/weggli
+	(depends on "rust").
+
+	Investigate clang-format compatibility as a possible migration
+	away from indent. This requires that the output is stable.
+
+	Check out https://github.com/milter-manager/milter-manager/
+
+	Check out https://cutter.osdn.jp/ (C/C++ unit tests).
+
+	Follow https://github.com/vdukhovni/postfix/commits/rpk
+
+	Figure out which mysql_*escape_string*() variant to use and
+	handle error results accordingly.
+
+	postscreen hints to smtpd to suppress the server greeating
+	after a remote SMTP client has pregreeted. This makes the
+	PIPELINING detection more meaingful.
+
+	Multi-recipient support in sender/recipient_bcc_maps and
+	always_bcc.
+
+	Test for dns_rr_copy() + dns_rr_free().
+
+
+	mail_conf_xxx supprt for non-negative numbers (i.e. 
+	numbers with a lower bound of zero).
+
+	Log anvil transgressions with their address range (in
+	addition to the offending IP address. We should not disclose
+	to random clients how we aggregate anvil event counters.
+
+	Should "postconf -f" pretty-print text inside {}?
+
+	Is there any code that calls attr_scan*() and that works
+	when the number of attributes received < the expected number?
+	If there is no such code, then we can simplify a few things.
+
+	Update TLS_README diagram, tlsmgr no longer manages cert
+	info.
+
+	Consider renaming local_header_rewrite_clients to
+	local_header_canonicalize_clients, as a more accurate name.
+	Optionally support "local_header_canonicalize_classes =
+	rewrite_addresses, add_missing_headers" (default setting).
+
+	And ditto for remote_header_rewrite_domain, whether it
+	should rewrite address, add missing headers, or both.
+
+	Add weight factors to randmap, for example randmap:{{result1}*99,
+	{result2}*1}. To parse out weights, see postscreen.
+
+	randmap already allows randmap:{{result}, ...}, to support
+	whitespace and comma in result values, but it should also
+	extract the value from {}.
+
+	Migrate masquerade_domains from ARGV to STRING_LIST, or
+	deprecate this feature because it breaks table-driven address
+	validation.
+
+	Enforce var_line_limit in util/attr_scan*c. This is needed if
+	we want to expose Postfix RPC protocols externally.
+
+	Can tests use LD_PRELOAD to inject fake modules such as
+	fake_dns(3), fake_msg(3), fake_myaddrinfo(3) and so on?
+	One limitation is that functions etc. in a preloaded object
+	always take precedence, even in code that is not being
+	tested.
+
+	'%l' support, similar to %D in the Dovecot LDAP driver.
+	Subject: Feature request: '%l' expansion for ldap_table,
+	Date: Tue, 5 Apr 2022.  Message-ID:
+	<ef7c661c-d86a-2366-6a73-ec8d51d75012@dev.snart.me>
+
+	WARN_IF_REJECT like prefix that disables the error counter increment.
+
+	Consider migrating Postfix server sockets from directory
+	$queue_directory/public to $queue_directory/protected. The
+	directory $queue_directory/public can then be used for
+	non-Postfix listeners (one subdirectory per application).
 
 	FILTER_README needs some text on multi-instance implementations,
 	and existing multi-instance references need to be updated.
 
 	Fix code that still uses "long" for data_size and data_offset,
-	and that uses "%ld" in sscanf().
+	and sscanf("%ld or strtou?l()). This seems relevant for 32-bit
+	systems. This would use a new REC_TYPE_OFFS with a corresponding
+	data type of off_t, using off_cvt() for conversion from string,
+	and new code to convert off_t to string.
 
 	A smart query service for live Postfix tables that outputs JSON?
+	If the idea is to introspect on a running Postfix system, this
+	involves adding an RPC endpoint to specific Postfix services.
+	That could work for single-instance services like qmgr, verify,
+	postscreen.
 
 	JSON logging?
 
 	default_transport_maps? This would simplify configuration.
 
 	Add a pointer to
+	https://fabianlee.org/2019/10/23/docker-running-a-postfix-container-for-testing-mail-during-development/
+	and https://github.com/docker-mailserver/docker-mailserver
+
+	Add a pointer to
+	https://github.com/tarickb/sasl-xoauth2 and/or
 	http://mmogilvi.users.sourceforge.net/software/oauthbearer.html
 	in documentation or on-line howtos.
 
-	Read http://mmogilvi.users.sourceforge.net/software/oauthbearer.html
-	and see how we can improve on the Postfix side.
+	Read the above links and see how we can improve usability on
+	the Postfix side.
 
 	Add verp=+= to the qmgr "from=" logging. This is already
 	implemented but not yet integrated.
