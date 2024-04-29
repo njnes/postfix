@@ -612,12 +612,14 @@ Examples:
 (default: see "postconf -d" output)</b></DT><DD>
 
 <p>
-Optional lookup tables with aliases that apply only to <a href="local.8.html">local(8)</a>
-recipients; this is unlike <a href="postconf.5.html#virtual_alias_maps">virtual_alias_maps</a> that apply to all
-recipients: <a href="local.8.html">local(8)</a>, virtual, and remote.
-The table format and lookups are documented in <a href="aliases.5.html">aliases(5)</a>. For an
-overview of Postfix address manipulations see the <a href="ADDRESS_REWRITING_README.html">ADDRESS_REWRITING_README</a>
-document. </p>
+Optional lookup tables that are searched only with an email address
+localpart (no domain) and that apply only to <a href="local.8.html">local(8)</a> recipients;
+this is unlike <a href="postconf.5.html#virtual_alias_maps">virtual_alias_maps</a> that are often searched with a
+full email address (including domain) and that apply to all recipients:
+<a href="local.8.html">local(8)</a>, virtual, and remote.
+The <a href="postconf.5.html#alias_maps">alias_maps</a> table format and lookups are documented in <a href="aliases.5.html">aliases(5)</a>.
+For an overview of Postfix address manipulations see the
+<a href="ADDRESS_REWRITING_README.html">ADDRESS_REWRITING_README</a> document. </p>
 
 <p>
 Specify zero or more "type:name" lookup tables, separated by
@@ -1467,6 +1469,40 @@ Examples:
 <a href="postconf.5.html#canonical_maps">canonical_maps</a> = <a href="DATABASE_README.html#types">dbm</a>:/etc/postfix/canonical
 <a href="postconf.5.html#canonical_maps">canonical_maps</a> = <a href="DATABASE_README.html#types">hash</a>:/etc/postfix/canonical
 </pre>
+
+
+</DD>
+
+<DT><b><a name="cleanup_replace_stray_cr_lf">cleanup_replace_stray_cr_lf</a>
+(default: yes)</b></DT><DD>
+
+<p> Replace each stray &lt;CR&gt; or &lt;LF&gt; character in message
+content with a space character, to prevent outbound SMTP smuggling,
+and to make the evaluation of Postfix-added DKIM or other signatures
+independent from how a remote mail server handles such characters.
+</p>
+
+<p> SMTP does not allow such characters unless they are part of a
+&lt;CR&gt;&lt;LF&gt; sequence, and different mail systems handle
+such stray characters in an implementation-dependent manner. Stray
+&lt;CR&gt; or &lt;LF&gt; characters could be used for outbound
+SMTP smuggling, where an attacker uses a Postfix server to send
+message content with a non-standard End-of-DATA sequence that
+triggers inbound SMTP smuggling at a remote SMTP server.</p>
+
+<p> The replacement happens before all other content management,
+and before Postfix may add a DKIM etc. signature; if the signature
+were created first, the replacement could invalidate the signature.
+</p>
+
+<p> In addition to preventing SMTP smuggling, replacing stray
+&lt;CR&gt; or &lt;LF&gt; characters ensures that the result of
+signature validation by later mail system will not depend on how
+that mail system handles those stray characters in an
+implementation-dependent manner. </p>
+
+<p> This feature is available in Postfix &ge; 3.9, 3.8.5, 3.7.10,
+3.6.14, and 3.5.24. </p>
 
 
 </DD>
@@ -4922,6 +4958,9 @@ configuration parameter.  See there for details.  </p>
 <p> The LMTP-specific version of the <a href="postconf.5.html#smtp_enforce_tls">smtp_enforce_tls</a> configuration
 parameter.  See there for details. </p>
 
+<p> This feature is deprecated as of Postfix 3.9. Specify
+<a href="postconf.5.html#lmtp_tls_security_level">lmtp_tls_security_level</a> instead. </p>
+
 <p> This feature is available in Postfix 2.3 and later. </p>
 
 
@@ -5770,6 +5809,9 @@ configuration parameter.  See there for details. </p>
 <p> The LMTP-specific version of the <a href="postconf.5.html#smtp_tls_per_site">smtp_tls_per_site</a> configuration
 parameter.  See there for details. </p>
 
+<p> This feature is deprecated as of Postfix 3.9. Specify
+<a href="postconf.5.html#lmtp_tls_policy_maps">lmtp_tls_policy_maps</a> instead. </p>
+
 <p> This feature is available in Postfix 2.3 and later. </p>
 
 
@@ -5901,6 +5943,9 @@ parameter. See there for details. </p>
 
 <p> The LMTP-specific version of the <a href="postconf.5.html#smtp_use_tls">smtp_use_tls</a> configuration
 parameter.  See there for details. </p>
+
+<p> This feature is deprecated as of Postfix 3.9. Specify
+<a href="postconf.5.html#lmtp_tls_security_level">lmtp_tls_security_level</a> instead. </p>
 
 <p> This feature is available in Postfix 2.3 and later. </p>
 
@@ -6497,6 +6542,11 @@ and later.</dd>
 <dt><b>DOMAIN</b></dt>
 
 <dd>The domain part of the recipient address. </dd>
+
+<dt><b>ENVID</b></dt>
+
+<dd>The optional <a href="https://tools.ietf.org/html/rfc3461">RFC 3461</a> envelope ID. Available in Postfix version
+3.9 and later</dd>
 
 <dt><b>EXTENSION</b></dt>
 
@@ -10274,12 +10324,19 @@ gateway host instead.
 </p>
 
 <p>
-In the case of SMTP or LMTP delivery, specify one or more destinations
-in the form of a domain name, hostname, hostname:port, [hostname]:port,
-[hostaddress] or [hostaddress]:port, separated by comma or whitespace.
-The form [hostname] turns off MX lookups. Multiple destinations are
-supported in Postfix 3.5 and later.
+In the case of SMTP delivery, specify one or more destinations in
+the form of a domain name, hostname, hostname:service, [hostname]:service,
+[hostaddress] or [hostaddress]:service, separated by comma or whitespace.
+The form [hostname] turns off MX or SRV lookups. Multiple destinations
+are supported in Postfix 3.5 and later. Each destination is tried
+in the specified order.
 </p>
+
+<p> If an SMTP destination is a load balancer, and there are no
+alternative destinations, specify the load balancer multiple times.
+Without the duplicate info, the Postfix SMTP client would not
+reconnect immediately to the same load balancer after a remote SMTP
+server failure. </p>
 
 <p>
 If you're connected via UUCP, see the <a href="UUCP_README.html">UUCP_README</a> file for useful
@@ -10833,6 +10890,8 @@ smtp      unix  -       -       n       -       -       smtp
 relay     unix  -       -       n       -       -       smtp
     -o <a href="postconf.5.html#syslog_name">syslog_name</a>=postfix/$<a href="postconf.5.html#service_name">service_name</a>
 </pre>
+
+<p> This feature is available in Postfix 3.3 and later. </p>
 
 
 </DD>
@@ -13548,7 +13607,9 @@ verification errors if server certificate verification is not required.
 With Postfix 2.8 and earlier, log the summary message and unconditionally
 log trust-chain verification errors.  </dd>
 
-<dt> </dt> <dd> 2 Also log levels during TLS negotiation.  </dd>
+<dt> </dt> <dd> 2 Also enable verbose logging in the Postfix TLS
+library, log session cache operations, and enable OpenSSL logging
+of the progress of the SSL handshake. </dd>
 
 <dt> </dt> <dd> 3 Also log the hexadecimal and ASCII dump of the
 TLS negotiation process.  </dd>
@@ -15172,9 +15233,8 @@ pubkey_fingerprint } } </dd>
 
 <dt><b><a name="check_client_access">check_client_access</a> <i><a href="DATABASE_README.html">type:table</a></i></b></dt>
 
-<dd>Search the specified access database for the client hostname,
-parent domains, client IP address, or networks obtained by stripping
-least significant octets. See the <a href="access.5.html">access(5)</a> manual page for details. </dd>
+<dd>Search the specified access database for the client hostname
+or IP address. See the <a href="access.5.html">access(5)</a> manual page for details. </dd>
 
 <dt><b><a name="check_client_a_access">check_client_a_access</a> <i><a href="DATABASE_README.html">type:table</a></i></b></dt>
 
@@ -15205,8 +15265,7 @@ available in Postfix 2.7 and later.  </dd>
 <dt><b><a name="check_reverse_client_hostname_access">check_reverse_client_hostname_access</a> <i><a href="DATABASE_README.html">type:table</a></i></b></dt>
 
 <dd>Search the specified access database for the unverified reverse
-client hostname, parent domains, client IP address, or networks
-obtained by stripping least significant octets. See the <a href="access.5.html">access(5)</a>
+client hostname or IP address. See the <a href="access.5.html">access(5)</a>
 manual page for details.  Note: a result of "OK" is not allowed for
 safety reasons.  Instead, use DUNNO in order to exclude specific
 hosts from denylists.  This feature is available in Postfix 2.6
@@ -15803,6 +15862,9 @@ server.  This option is therefore off by default. </p>
 STARTTLS due to insufficient privileges to access the server private
 key. This is intended behavior. </p>
 
+<p> This feature is deprecated as of Postfix 3.9. Specify
+<a href="postconf.5.html#smtpd_tls_security_level">smtpd_tls_security_level</a> instead. </p>
+
 <p> This feature is available in Postfix 2.2 and later. With
 Postfix 2.3 and later use <a href="postconf.5.html#smtpd_tls_security_level">smtpd_tls_security_level</a> instead. </p>
 
@@ -15864,8 +15926,8 @@ received with the ETRN command.
 
 <dt><b><a name="check_etrn_access">check_etrn_access</a> <i><a href="DATABASE_README.html">type:table</a></i></b></dt>
 
-<dd>Search the specified access database for the ETRN domain name
-or its parent domains. See the <a href="access.5.html">access(5)</a> manual page for details.
+<dd>Search the specified access database for the ETRN domain name.
+See the <a href="access.5.html">access(5)</a> manual page for details.
 </dd>
 
 </dl>
@@ -15912,6 +15974,161 @@ parameter $name expansion.
 <p>
 This feature is available in Postfix 2.0 and later.
 </p>
+
+
+</DD>
+
+<DT><b><a name="smtpd_forbid_bare_newline">smtpd_forbid_bare_newline</a>
+(default: Postfix &ge; 3.9: normalize)</b></DT><DD>
+
+<p> Reject or restrict input lines from an SMTP client that end in
+&lt;LF&gt; instead of the standard &lt;CR&gt;&lt;LF&gt;. Such line
+endings are commonly allowed with UNIX-based SMTP servers, but they
+violate <a href="https://tools.ietf.org/html/rfc5321">RFC 5321</a>, and allowing such line endings can make a server
+vulnerable to <a href="https://www.postfix.org/smtp-smuggling.html">
+SMTP smuggling</a>.  </p>
+
+<p> Specify one of the following values (case does not matter): </p>
+
+<dl compact>
+
+<dt> <b>normalize</b> (default for Postfix &ge; 3.9) </dt>
+<dd> Require the standard
+End-of-DATA sequence &lt;CR&gt;&lt;LF&gt;.&lt;CR&gt;&lt;LF&gt;.
+Otherwise, allow command or message content lines ending in the
+non-standard &lt;LF&gt;, and process them as if the client sent the
+standard &lt;CR&gt;&lt;LF&gt;. <br> <br> This maintains compatibility
+with many legitimate SMTP client applications that send a mix of
+standard and non-standard line endings, but will fail to receive
+email from client implementations that do not terminate DATA content
+with the standard End-of-DATA sequence
+&lt;CR&gt;&lt;LF&gt;.&lt;CR&gt;&lt;LF&gt;. <br> <br> Such clients
+can be excluded with <a href="postconf.5.html#smtpd_forbid_bare_newline_exclusions">smtpd_forbid_bare_newline_exclusions</a>. </dd>
+
+<dt> <b>note</b> </dt> <dd> Same as "normalize", but also notes in
+the log whether the Postfix SMTP server received any lines with
+"bare &lt;LF&gt;". The information is formatted as "<tt>disconnect
+from name[address] ...  notes=bare_lf</tt>". The notes value is
+expected to become a list of comma-separated names. <br> <br> This
+feature is available in Postfix 3.9 and later. </dd>
+
+<dt> <b>yes</b> </dt> <dd> Compatibility alias for <b>normalize</b>. </dd>
+
+<dt> <b>reject</b> </dt> <dd> Require the standard End-of-DATA
+sequence &lt;CR&gt;&lt;LF&gt;.&lt;CR&gt;&lt;LF&gt;. Reject a command
+or message content when a line contains bare &lt;LF&gt;, log a "bare
+&lt;LF&gt; received" error, and reply with the SMTP status code in
+$<a href="postconf.5.html#smtpd_forbid_bare_newline_reject_code">smtpd_forbid_bare_newline_reject_code</a>. <br> <br> This will reject
+email from SMTP clients that send any non-standard line endings
+such as web applications, netcat, or load balancer health checks.
+<br> <br> This will also reject email from services that use BDAT
+to send MIME text containing a bare newline (<a href="https://tools.ietf.org/html/rfc3030">RFC 3030</a> Section 3
+requires canonical MIME format for text message types, defined in
+<a href="https://tools.ietf.org/html/rfc2045">RFC 2045</a> Sections 2.7 and 2.8). <br> <br> Such clients can be
+excluded with <a href="postconf.5.html#smtpd_forbid_bare_newline_exclusions">smtpd_forbid_bare_newline_exclusions</a> (or, in the case
+of BDAT violations, BDAT can be selectively disabled with
+<a href="postconf.5.html#smtpd_discard_ehlo_keyword_address_maps">smtpd_discard_ehlo_keyword_address_maps</a>, or globally disabled with
+<a href="postconf.5.html#smtpd_discard_ehlo_keywords">smtpd_discard_ehlo_keywords</a>). </dd>
+
+<dt> <b>no</b> (default for Postfix &lt; 3.9) </dt>
+<dd> Do not require the standard End-of-DATA
+sequence &lt;CR&gt;&lt;LF&gt;.&lt;CR&gt;&lt;LF&gt;. Always process
+a bare &lt;LF&gt; as if the client sent &lt;CR&gt;&lt;LF&gt;. This
+option is fully backwards compatible, but is not recommended for
+an Internet-facing SMTP server, because it is vulnerable to <a
+href="https://www.postfix.org/smtp-smuggling.html"> SMTP smuggling</a>.
+</dd>
+
+</dl>
+
+<p> Recommended settings: </p>
+
+<blockquote>
+<pre>
+# Require the standard End-of-DATA sequence &lt;CR&gt;&lt;LF&gt;.&lt;CR&gt;&lt;LF&gt;.
+# Otherwise, allow bare &lt;LF&gt; and process it as if the client sent
+# &lt;CR&gt;&lt;LF&gt;.
+#
+# This maintains compatibility with many legitimate SMTP client
+# applications that send a mix of standard and non-standard line
+# endings, but will fail to receive email from client implementations
+# that do not terminate DATA content with the standard End-of-DATA
+# sequence &lt;CR&gt;&lt;LF&gt;.&lt;CR&gt;&lt;LF&gt;.
+#
+# Such clients can be allowlisted with <a href="postconf.5.html#smtpd_forbid_bare_newline_exclusions">smtpd_forbid_bare_newline_exclusions</a>.
+# The example below allowlists SMTP clients in trusted networks.
+#
+<a href="postconf.5.html#smtpd_forbid_bare_newline">smtpd_forbid_bare_newline</a> = normalize
+<a href="postconf.5.html#smtpd_forbid_bare_newline_exclusions">smtpd_forbid_bare_newline_exclusions</a> = $<a href="postconf.5.html#mynetworks">mynetworks</a>
+</pre>
+</blockquote>
+
+<p> Alternative: </p>
+
+<blockquote>
+<pre>
+# Reject input lines that contain &lt;LF&gt; and log a "bare &lt;LF&gt; received"
+# error. Require that input lines end in &lt;CR&gt;&lt;LF&gt;, and require the
+# standard End-of-DATA sequence &lt;CR&gt;&lt;LF&gt;.&lt;CR&gt;&lt;LF&gt;.
+#
+# This will reject email from SMTP clients that send any non-standard
+# line endings such as web applications, netcat, or load balancer
+# health checks.
+#
+# This will also reject email from services that use BDAT to send
+# MIME text containing a bare newline (<a href="https://tools.ietf.org/html/rfc3030">RFC 3030</a> Section 3 requires
+# canonical MIME format for text message types, defined in <a href="https://tools.ietf.org/html/rfc2045">RFC 2045</a>
+# Sections 2.7 and 2.8).
+#
+# Such clients can be allowlisted with <a href="postconf.5.html#smtpd_forbid_bare_newline_exclusions">smtpd_forbid_bare_newline_exclusions</a>.
+# The example below allowlists SMTP clients in trusted networks.
+#
+<a href="postconf.5.html#smtpd_forbid_bare_newline">smtpd_forbid_bare_newline</a> = reject
+<a href="postconf.5.html#smtpd_forbid_bare_newline_exclusions">smtpd_forbid_bare_newline_exclusions</a> = $<a href="postconf.5.html#mynetworks">mynetworks</a>
+#
+# Alternatively, in the case of BDAT violations, BDAT can be selectively
+# disabled with <a href="postconf.5.html#smtpd_discard_ehlo_keyword_address_maps">smtpd_discard_ehlo_keyword_address_maps</a>, or globally
+# disabled with <a href="postconf.5.html#smtpd_discard_ehlo_keywords">smtpd_discard_ehlo_keywords</a>.
+#
+# <a href="postconf.5.html#smtpd_discard_ehlo_keyword_address_maps">smtpd_discard_ehlo_keyword_address_maps</a> = <a href="cidr_table.5.html">cidr</a>:/path/to/file
+# /path/to/file:
+#     10.0.0.0/24 chunking, silent-discard
+# <a href="postconf.5.html#smtpd_discard_ehlo_keywords">smtpd_discard_ehlo_keywords</a> = chunking, silent-discard
+</pre>
+</blockquote>
+
+<p> This feature with settings <b>yes</b> and <b>no</b> is available
+in Postfix 3.8.4, 3.7.9, 3.6.13, and 3.5.23. Additionally, the
+settings <b>reject</b>, and <b>normalize</b> are available with
+Postfix &ge; 3.9, 3.8.5, 3.7.10, 3.6.14, and 3.5.24. </p>
+
+
+</DD>
+
+<DT><b><a name="smtpd_forbid_bare_newline_exclusions">smtpd_forbid_bare_newline_exclusions</a>
+(default: $<a href="postconf.5.html#mynetworks">mynetworks</a>)</b></DT><DD>
+
+<p> Exclude the specified clients from <a href="postconf.5.html#smtpd_forbid_bare_newline">smtpd_forbid_bare_newline</a>
+enforcement. This setting uses the same syntax and parent-domain
+matching behavior as <a href="postconf.5.html#mynetworks">mynetworks</a>. </p>
+
+<p> This feature is available in Postfix &ge; 3.9, 3.8.4, 3.7.9,
+3.6.13, and 3.5.23. </p>
+
+
+</DD>
+
+<DT><b><a name="smtpd_forbid_bare_newline_reject_code">smtpd_forbid_bare_newline_reject_code</a>
+(default: 550)</b></DT><DD>
+
+<p>
+The numerical Postfix SMTP server response code when rejecting a
+request with "<a href="postconf.5.html#smtpd_forbid_bare_newline">smtpd_forbid_bare_newline</a> = reject".
+Specify a 5XX status code (521 to disconnect).
+</p>
+
+<p> This feature is available in Postfix &ge; 3.9, 3.8.5, 3.7.10,
+3.6.14, and 3.5.24. </p>
 
 
 </DD>
@@ -16028,7 +16245,7 @@ received with the HELO or EHLO command.
 <dt><b><a name="check_helo_access">check_helo_access</a> <i><a href="DATABASE_README.html">type:table</a></i></b></dt>
 
 <dd>Search the specified <a href="access.5.html">access(5)</a> database for the HELO or EHLO
-hostname or parent domains, and execute the corresponding action.
+hostname, and execute the corresponding action.
 Note: specify "<a href="postconf.5.html#smtpd_helo_required">smtpd_helo_required</a> = yes" to fully enforce this
 restriction (without "<a href="postconf.5.html#smtpd_helo_required">smtpd_helo_required</a> = yes", a client can
 simply skip <a href="postconf.5.html#check_helo_access">check_helo_access</a> by not sending HELO or EHLO).  </dd>
@@ -16692,8 +16909,7 @@ that is received with the RCPT TO command.
 <dt><b><a name="check_recipient_access">check_recipient_access</a> <i><a href="DATABASE_README.html">type:table</a></i></b></dt>
 
 <dd>Search the specified <a href="access.5.html">access(5)</a> database for the resolved RCPT
-TO address, domain, parent domains, or localpart@, and execute the
-corresponding action.  </dd>
+TO address, and execute the corresponding action.  </dd>
 
 <dt><b><a name="check_recipient_a_access">check_recipient_a_access</a> <i><a href="DATABASE_README.html">type:table</a></i></b></dt>
 
@@ -17540,8 +17756,7 @@ received with the MAIL FROM command.
 <dt><b><a name="check_sender_access">check_sender_access</a> <i><a href="DATABASE_README.html">type:table</a></i></b></dt>
 
 <dd>Search the specified <a href="access.5.html">access(5)</a> database for the MAIL FROM
-address, domain, parent domains, or localpart@, and execute the
-corresponding action. </dd>
+address, and execute the corresponding action. </dd>
 
 <dt><b><a name="check_sender_a_access">check_sender_a_access</a> <i><a href="DATABASE_README.html">type:table</a></i></b></dt>
 
@@ -18648,7 +18863,9 @@ if client certificate verification is not required.  With Postfix 2.8 and
 earlier, log the summary message, peer certificate summary information
 and unconditionally log trust-chain verification errors.  </dd>
 
-<dt> </dt> <dd> 2 Also log levels during TLS negotiation. </dd>
+<dt> </dt> <dd> 2 Also enable verbose logging in the Postfix TLS
+library, log session cache operations, and enable OpenSSL logging
+of the progress of the SSL handshake. </dd>
 
 <dt> </dt> <dd> 3 Also log hexadecimal and ASCII dump of TLS negotiation
 process. </dd>
@@ -19106,6 +19323,9 @@ but do not require that clients use TLS encryption. </p>
 <p> Note: when invoked via "<b>sendmail -bs</b>", Postfix will never offer
 STARTTLS due to insufficient privileges to access the server private
 key. This is intended behavior. </p>
+
+<p> This feature is deprecated as of Postfix 3.9. Specify
+<a href="postconf.5.html#smtpd_tls_security_level">smtpd_tls_security_level</a> instead. </p>
 
 <p> This feature is available in Postfix 2.2 and later. With
 Postfix 2.3 and later use <a href="postconf.5.html#smtpd_tls_security_level">smtpd_tls_security_level</a> instead. </p>
@@ -20531,6 +20751,9 @@ to configure tlsproxy client keys and certificates is via the
 See <a href="postconf.5.html#smtp_enforce_tls">smtp_enforce_tls</a> for further details. Use
 <a href="postconf.5.html#tlsproxy_client_security_level">tlsproxy_client_security_level</a> instead. </p>
 
+<p> This feature is deprecated as of Postfix 3.9. Specify
+<a href="postconf.5.html#tlsproxy_client_security_level">tlsproxy_client_security_level</a> instead. </p>
+
 <p> This feature is available in Postfix 3.4 and later. </p>
 
 
@@ -20602,6 +20825,9 @@ value. </p>
 usage policy by next-hop destination and by remote TLS server
 hostname.  See <a href="postconf.5.html#smtp_tls_per_site">smtp_tls_per_site</a> for further details. </p>
 
+<p> This feature is deprecated as of Postfix 3.9. Specify
+<a href="postconf.5.html#tlsproxy_client_policy_maps">tlsproxy_client_policy_maps</a> instead. </p>
+
 <p> This feature is available in Postfix 3.4 and later. </p>
 
 
@@ -20663,6 +20889,9 @@ was previously called <a href="postconf.5.html#tlsproxy_client_level">tlsproxy_c
 support. See <a href="postconf.5.html#smtp_use_tls">smtp_use_tls</a> for further details. Use
 <a href="postconf.5.html#tlsproxy_client_security_level">tlsproxy_client_security_level</a> instead. </p>
 
+<p> This feature is deprecated as of Postfix 3.9. Specify
+<a href="postconf.5.html#tlsproxy_client_security_level">tlsproxy_client_security_level</a> instead. </p>
+
 <p> This feature is available in Postfix 3.4 and later. </p>
 
 
@@ -20674,6 +20903,9 @@ support. See <a href="postconf.5.html#smtp_use_tls">smtp_use_tls</a> for further
 <p> Mandatory TLS: announce STARTTLS support to remote SMTP clients, and
 require that clients use TLS encryption. See <a href="postconf.5.html#smtpd_enforce_tls">smtpd_enforce_tls</a> for
 further details. Use <a href="postconf.5.html#tlsproxy_tls_security_level">tlsproxy_tls_security_level</a> instead. </p>
+
+<p> This feature is deprecated as of Postfix 3.9. Specify
+<a href="postconf.5.html#tlsproxy_tls_security_level">tlsproxy_tls_security_level</a> instead. </p>
 
 <p> This feature is available in Postfix 2.8 and later. </p>
 
@@ -20807,6 +21039,8 @@ private DSA key.  DSA is obsolete and should not be used.  See
 should use with non-export EDH ciphers. See <a href="postconf.5.html#smtpd_tls_dh1024_param_file">smtpd_tls_dh1024_param_file</a>
 for further details. </p>
 
+<p> This feature is deprecated as of Postfix 3.9. Do not specify. </p>
+
 <p> This feature is available in Postfix 2.8 and later. </p>
 
 
@@ -20878,6 +21112,8 @@ the "<a href="postconf.5.html#tlsproxy_tls_chain_files">tlsproxy_tls_chain_files
 <p> The Postfix <a href="tlsproxy.8.html">tlsproxy(8)</a> server security grade for ephemeral
 elliptic-curve Diffie-Hellman (EECDH) key exchange. See
 <a href="postconf.5.html#smtpd_tls_eecdh_grade">smtpd_tls_eecdh_grade</a> for further details. </p>
+
+<p> This feature is deprecated as of Postfix 3.9. Do not specify. </p>
 
 <p> This feature is available in Postfix 2.8 and later. </p>
 
@@ -21042,6 +21278,9 @@ shared by all three services, namely <a href="postconf.5.html#smtpd_tls_session_
 <p> Opportunistic TLS: announce STARTTLS support to remote SMTP clients,
 but do not require that clients use TLS encryption. See <a href="postconf.5.html#smtpd_use_tls">smtpd_use_tls</a>
 for further details. Use <a href="postconf.5.html#tlsproxy_tls_security_level">tlsproxy_tls_security_level</a> instead. </p>
+
+<p> This feature is deprecated as of Postfix 3.9. Specify
+<a href="postconf.5.html#tlsproxy_tls_security_level">tlsproxy_tls_security_level</a> instead. </p>
 
 <p> This feature is available in Postfix 2.8 and later. </p>
 
@@ -22008,10 +22247,12 @@ This feature is available in Postfix 2.1 and later.
 (default: $<a href="postconf.5.html#virtual_maps">virtual_maps</a>)</b></DT><DD>
 
 <p>
-Optional lookup tables with aliases that apply to all recipients:
-<a href="local.8.html">local(8)</a>, virtual, and remote; this is unlike <a href="postconf.5.html#alias_maps">alias_maps</a> that apply
+Optional lookup tables that are often searched with a full email
+address (including domain) and that apply to all recipients: <a href="local.8.html">local(8)</a>,
+virtual, and remote; this is unlike <a href="postconf.5.html#alias_maps">alias_maps</a> that are only searched
+with an email address localpart (no domain) and that apply
 only to <a href="local.8.html">local(8)</a> recipients.
-The table format and lookups
+The <a href="postconf.5.html#virtual_alias_maps">virtual_alias_maps</a> table format and lookups
 are documented in <a href="virtual.5.html">virtual(5)</a>. For an overview of Postfix address
 manipulations see the <a href="ADDRESS_REWRITING_README.html">ADDRESS_REWRITING_README</a> document.
 </p>

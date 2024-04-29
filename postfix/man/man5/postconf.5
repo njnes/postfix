@@ -358,12 +358,14 @@ alias_database = hash:/etc/mail/aliases
 .ad
 .ft R
 .SH alias_maps (default: see "postconf \-d" output)
-Optional lookup tables with aliases that apply only to \fBlocal\fR(8)
-recipients; this is unlike virtual_alias_maps that apply to all
-recipients: \fBlocal\fR(8), virtual, and remote.
-The table format and lookups are documented in \fBaliases\fR(5). For an
-overview of Postfix address manipulations see the ADDRESS_REWRITING_README
-document.
+Optional lookup tables that are searched only with an email address
+localpart (no domain) and that apply only to \fBlocal\fR(8) recipients;
+this is unlike virtual_alias_maps that are often searched with a
+full email address (including domain) and that apply to all recipients:
+\fBlocal\fR(8), virtual, and remote.
+The alias_maps table format and lookups are documented in \fBaliases\fR(5).
+For an overview of Postfix address manipulations see the
+ADDRESS_REWRITING_README document.
 .PP
 Specify zero or more "type:name" lookup tables, separated by
 whitespace or comma. Tables will be searched in the specified order
@@ -883,6 +885,32 @@ canonical_maps = hash:/etc/postfix/canonical
 .fi
 .ad
 .ft R
+.SH cleanup_replace_stray_cr_lf (default: yes)
+Replace each stray <CR> or <LF> character in message
+content with a space character, to prevent outbound SMTP smuggling,
+and to make the evaluation of Postfix\-added DKIM or other signatures
+independent from how a remote mail server handles such characters.
+.PP
+SMTP does not allow such characters unless they are part of a
+<CR><LF> sequence, and different mail systems handle
+such stray characters in an implementation\-dependent manner. Stray
+<CR> or <LF> characters could be used for outbound
+SMTP smuggling, where an attacker uses a Postfix server to send
+message content with a non\-standard End\-of\-DATA sequence that
+triggers inbound SMTP smuggling at a remote SMTP server.
+.PP
+The replacement happens before all other content management,
+and before Postfix may add a DKIM etc. signature; if the signature
+were created first, the replacement could invalidate the signature.
+.PP
+In addition to preventing SMTP smuggling, replacing stray
+<CR> or <LF> characters ensures that the result of
+signature validation by later mail system will not depend on how
+that mail system handles those stray characters in an
+implementation\-dependent manner.
+.PP
+This feature is available in Postfix >= 3.9, 3.8.5, 3.7.10,
+3.6.14, and 3.5.24.
 .SH cleanup_service_name (default: cleanup)
 The name of the \fBcleanup\fR(8) service. This service rewrites addresses
 into the standard form, and performs \fBcanonical\fR(5) address mapping
@@ -3118,6 +3146,9 @@ This feature is available in Postfix 2.11 and later.
 The LMTP\-specific version of the smtp_enforce_tls configuration
 parameter.  See there for details.
 .PP
+This feature is deprecated as of Postfix 3.9. Specify
+lmtp_tls_security_level instead.
+.PP
 This feature is available in Postfix 2.3 and later.
 .SH lmtp_fallback_relay (default: empty)
 Optional list of relay hosts for LMTP destinations that can't be
@@ -3529,6 +3560,9 @@ This feature is available in Postfix 2.3 and later.
 The LMTP\-specific version of the smtp_tls_per_site configuration
 parameter.  See there for details.
 .PP
+This feature is deprecated as of Postfix 3.9. Specify
+lmtp_tls_policy_maps instead.
+.PP
 This feature is available in Postfix 2.3 and later.
 .SH lmtp_tls_policy_maps (default: empty)
 The LMTP\-specific version of the smtp_tls_policy_maps
@@ -3588,6 +3622,9 @@ This feature is available in Postfix 3.0 and later.
 .SH lmtp_use_tls (default: no)
 The LMTP\-specific version of the smtp_use_tls configuration
 parameter.  See there for details.
+.PP
+This feature is deprecated as of Postfix 3.9. Specify
+lmtp_tls_security_level instead.
 .PP
 This feature is available in Postfix 2.3 and later.
 .SH lmtp_xforward_timeout (default: 300s)
@@ -4022,6 +4059,10 @@ Remote client protocol. Available in Postfix version 2.2 and later.
 .br
 .IP "\fBDOMAIN\fR"
 The domain part of the recipient address.
+.br
+.IP "\fBENVID\fR"
+The optional RFC 3461 envelope ID. Available in Postfix version
+3.9 and later
 .br
 .IP "\fBEXTENSION\fR"
 The optional address extension.
@@ -6501,11 +6542,18 @@ On an intranet, specify the organizational domain name. If your
 internal DNS uses no MX records, specify the name of the intranet
 gateway host instead.
 .PP
-In the case of SMTP or LMTP delivery, specify one or more destinations
-in the form of a domain name, hostname, hostname:port, [hostname]:port,
-[hostaddress] or [hostaddress]:port, separated by comma or whitespace.
-The form [hostname] turns off MX lookups. Multiple destinations are
-supported in Postfix 3.5 and later.
+In the case of SMTP delivery, specify one or more destinations in
+the form of a domain name, hostname, hostname:service, [hostname]:service,
+[hostaddress] or [hostaddress]:service, separated by comma or whitespace.
+The form [hostname] turns off MX or SRV lookups. Multiple destinations
+are supported in Postfix 3.5 and later. Each destination is tried
+in the specified order.
+.PP
+If an SMTP destination is a load balancer, and there are no
+alternative destinations, specify the load balancer multiple times.
+Without the duplicate info, the Postfix SMTP client would not
+reconnect immediately to the same load balancer after a remote SMTP
+server failure.
 .PP
 If you're connected via UUCP, see the UUCP_README file for useful
 information.
@@ -6903,6 +6951,8 @@ relay     unix  \-       \-       n       \-       \-       smtp
 .fi
 .ad
 .ft R
+.PP
+This feature is available in Postfix 3.3 and later.
 .SH service_throttle_time (default: 60s)
 How long the Postfix \fBmaster\fR(8) waits before forking a server that
 appears to be malfunctioning.
@@ -8985,7 +9035,9 @@ With Postfix 2.8 and earlier, log the summary message and unconditionally
 log trust\-chain verification errors.
 .br
 .IP ""
-2 Also log levels during TLS negotiation.
+2 Also enable verbose logging in the Postfix TLS
+library, log session cache operations, and enable OpenSSL logging
+of the progress of the SSL handshake.
 .br
 .IP ""
 3 Also log the hexadecimal and ASCII dump of the
@@ -10374,9 +10426,8 @@ pubkey_fingerprint } }
 The commas are optional.
 .br
 .IP "\fBcheck_client_access \fItype:table\fR\fR"
-Search the specified access database for the client hostname,
-parent domains, client IP address, or networks obtained by stripping
-least significant octets. See the \fBaccess\fR(5) manual page for details.
+Search the specified access database for the client hostname
+or IP address. See the \fBaccess\fR(5) manual page for details.
 .br
 .IP "\fBcheck_client_a_access \fItype:table\fR\fR"
 Search the specified \fBaccess\fR(5) database for the IP addresses for the
@@ -10403,8 +10454,7 @@ available in Postfix 2.7 and later.
 .br
 .IP "\fBcheck_reverse_client_hostname_access \fItype:table\fR\fR"
 Search the specified access database for the unverified reverse
-client hostname, parent domains, client IP address, or networks
-obtained by stripping least significant octets. See the \fBaccess\fR(5)
+client hostname or IP address. See the \fBaccess\fR(5)
 manual page for details.  Note: a result of "OK" is not allowed for
 safety reasons.  Instead, use DUNNO in order to exclude specific
 hosts from denylists.  This feature is available in Postfix 2.6
@@ -10931,6 +10981,9 @@ Note 2: when invoked via "\fBsendmail \-bs\fR", Postfix will never offer
 STARTTLS due to insufficient privileges to access the server private
 key. This is intended behavior.
 .PP
+This feature is deprecated as of Postfix 3.9. Specify
+smtpd_tls_security_level instead.
+.PP
 This feature is available in Postfix 2.2 and later. With
 Postfix 2.3 and later use smtpd_tls_security_level instead.
 .SH smtpd_error_sleep_time (default: 1s)
@@ -10967,8 +11020,8 @@ restriction that matches wins.
 The following restrictions are specific to the domain name information
 received with the ETRN command.
 .IP "\fBcheck_etrn_access \fItype:table\fR\fR"
-Search the specified access database for the ETRN domain name
-or its parent domains. See the \fBaccess\fR(5) manual page for details.
+Search the specified access database for the ETRN domain name.
+See the \fBaccess\fR(5) manual page for details.
 .br
 .br
 .PP
@@ -10999,6 +11052,164 @@ The smtpd_expansion_filter value is not subject to Postfix configuration
 parameter $name expansion.
 .PP
 This feature is available in Postfix 2.0 and later.
+.SH smtpd_forbid_bare_newline (default: Postfix >= 3.9: normalize)
+Reject or restrict input lines from an SMTP client that end in
+<LF> instead of the standard <CR><LF>. Such line
+endings are commonly allowed with UNIX\-based SMTP servers, but they
+violate RFC 5321, and allowing such line endings can make a server
+vulnerable to
+SMTP smuggling.
+.PP
+Specify one of the following values (case does not matter):
+.IP "\fBnormalize\fR (default for Postfix >= 3.9)"
+Require the standard
+End\-of\-DATA sequence <CR><LF>.<CR><LF>.
+Otherwise, allow command or message content lines ending in the
+non\-standard <LF>, and process them as if the client sent the
+standard <CR><LF>.
+.br
+.br
+This maintains compatibility
+with many legitimate SMTP client applications that send a mix of
+standard and non\-standard line endings, but will fail to receive
+email from client implementations that do not terminate DATA content
+with the standard End\-of\-DATA sequence
+<CR><LF>.<CR><LF>.
+.br
+.br
+Such clients
+can be excluded with smtpd_forbid_bare_newline_exclusions.
+.br
+.IP "\fBnote\fR"
+Same as "normalize", but also notes in
+the log whether the Postfix SMTP server received any lines with
+"bare <LF>". The information is formatted as "disconnect
+from name[address] ...  notes=bare_lf". The notes value is
+expected to become a list of comma\-separated names.
+.br
+.br
+This
+feature is available in Postfix 3.9 and later.
+.br
+.IP "\fByes\fR"
+Compatibility alias for \fBnormalize\fR.
+.br
+.IP "\fBreject\fR"
+Require the standard End\-of\-DATA
+sequence <CR><LF>.<CR><LF>. Reject a command
+or message content when a line contains bare <LF>, log a "bare
+<LF> received" error, and reply with the SMTP status code in
+$smtpd_forbid_bare_newline_reject_code.
+.br
+.br
+This will reject
+email from SMTP clients that send any non\-standard line endings
+such as web applications, netcat, or load balancer health checks.
+.br
+.br
+This will also reject email from services that use BDAT
+to send MIME text containing a bare newline (RFC 3030 Section 3
+requires canonical MIME format for text message types, defined in
+RFC 2045 Sections 2.7 and 2.8).
+.br
+.br
+Such clients can be
+excluded with smtpd_forbid_bare_newline_exclusions (or, in the case
+of BDAT violations, BDAT can be selectively disabled with
+smtpd_discard_ehlo_keyword_address_maps, or globally disabled with
+smtpd_discard_ehlo_keywords).
+.br
+.IP "\fBno\fR (default for Postfix < 3.9)"
+Do not require the standard End\-of\-DATA
+sequence <CR><LF>.<CR><LF>. Always process
+a bare <LF> as if the client sent <CR><LF>. This
+option is fully backwards compatible, but is not recommended for
+an Internet\-facing SMTP server, because it is vulnerable to  SMTP smuggling.
+.br
+.br
+.PP
+Recommended settings:
+.sp
+.in +4
+.nf
+.na
+.ft C
+# Require the standard End\-of\-DATA sequence <CR><LF>.<CR><LF>.
+# Otherwise, allow bare <LF> and process it as if the client sent
+# <CR><LF>.
+#
+# This maintains compatibility with many legitimate SMTP client
+# applications that send a mix of standard and non\-standard line
+# endings, but will fail to receive email from client implementations
+# that do not terminate DATA content with the standard End\-of\-DATA
+# sequence <CR><LF>.<CR><LF>.
+#
+# Such clients can be allowlisted with smtpd_forbid_bare_newline_exclusions.
+# The example below allowlists SMTP clients in trusted networks.
+#
+smtpd_forbid_bare_newline = normalize
+smtpd_forbid_bare_newline_exclusions = $mynetworks
+.fi
+.ad
+.ft R
+.in -4
+.PP
+Alternative:
+.sp
+.in +4
+.nf
+.na
+.ft C
+# Reject input lines that contain <LF> and log a "bare <LF> received"
+# error. Require that input lines end in <CR><LF>, and require the
+# standard End\-of\-DATA sequence <CR><LF>.<CR><LF>.
+#
+# This will reject email from SMTP clients that send any non\-standard
+# line endings such as web applications, netcat, or load balancer
+# health checks.
+#
+# This will also reject email from services that use BDAT to send
+# MIME text containing a bare newline (RFC 3030 Section 3 requires
+# canonical MIME format for text message types, defined in RFC 2045
+# Sections 2.7 and 2.8).
+#
+# Such clients can be allowlisted with smtpd_forbid_bare_newline_exclusions.
+# The example below allowlists SMTP clients in trusted networks.
+#
+smtpd_forbid_bare_newline = reject
+smtpd_forbid_bare_newline_exclusions = $mynetworks
+#
+# Alternatively, in the case of BDAT violations, BDAT can be selectively
+# disabled with smtpd_discard_ehlo_keyword_address_maps, or globally
+# disabled with smtpd_discard_ehlo_keywords.
+#
+# smtpd_discard_ehlo_keyword_address_maps = cidr:/path/to/file
+# /path/to/file:
+#     10.0.0.0/24 chunking, silent\-discard
+# smtpd_discard_ehlo_keywords = chunking, silent\-discard
+.fi
+.ad
+.ft R
+.in -4
+.PP
+This feature with settings \fByes\fR and \fBno\fR is available
+in Postfix 3.8.4, 3.7.9, 3.6.13, and 3.5.23. Additionally, the
+settings \fBreject\fR, and \fBnormalize\fR are available with
+Postfix >= 3.9, 3.8.5, 3.7.10, 3.6.14, and 3.5.24.
+.SH smtpd_forbid_bare_newline_exclusions (default: $mynetworks)
+Exclude the specified clients from smtpd_forbid_bare_newline
+enforcement. This setting uses the same syntax and parent\-domain
+matching behavior as mynetworks.
+.PP
+This feature is available in Postfix >= 3.9, 3.8.4, 3.7.9,
+3.6.13, and 3.5.23.
+.SH smtpd_forbid_bare_newline_reject_code (default: 550)
+The numerical Postfix SMTP server response code when rejecting a
+request with "smtpd_forbid_bare_newline = reject".
+Specify a 5XX status code (521 to disconnect).
+.PP
+This feature is available in Postfix >= 3.9, 3.8.5, 3.7.10,
+3.6.14, and 3.5.24.
 .SH smtpd_forbid_unauth_pipelining (default: Postfix >= 3.9: yes)
 Disconnect remote SMTP clients that violate RFC 2920 (or 5321)
 command pipelining constraints. The server replies with "554 5.5.0
@@ -11062,7 +11273,7 @@ The following restrictions are specific to the hostname information
 received with the HELO or EHLO command.
 .IP "\fBcheck_helo_access \fItype:table\fR\fR"
 Search the specified \fBaccess\fR(5) database for the HELO or EHLO
-hostname or parent domains, and execute the corresponding action.
+hostname, and execute the corresponding action.
 Note: specify "smtpd_helo_required = yes" to fully enforce this
 restriction (without "smtpd_helo_required = yes", a client can
 simply skip check_helo_access by not sending HELO or EHLO).
@@ -11528,8 +11739,7 @@ The following restrictions are specific to the recipient address
 that is received with the RCPT TO command.
 .IP "\fBcheck_recipient_access \fItype:table\fR\fR"
 Search the specified \fBaccess\fR(5) database for the resolved RCPT
-TO address, domain, parent domains, or localpart@, and execute the
-corresponding action.
+TO address, and execute the corresponding action.
 .br
 .IP "\fBcheck_recipient_a_access \fItype:table\fR\fR"
 Search the specified \fBaccess\fR(5) database for the IP addresses for
@@ -12187,8 +12397,7 @@ The following restrictions are specific to the sender address
 received with the MAIL FROM command.
 .IP "\fBcheck_sender_access \fItype:table\fR\fR"
 Search the specified \fBaccess\fR(5) database for the MAIL FROM
-address, domain, parent domains, or localpart@, and execute the
-corresponding action.
+address, and execute the corresponding action.
 .br
 .IP "\fBcheck_sender_a_access \fItype:table\fR\fR"
 Search the specified \fBaccess\fR(5) database for the IP addresses for
@@ -13215,7 +13424,9 @@ earlier, log the summary message, peer certificate summary information
 and unconditionally log trust\-chain verification errors.
 .br
 .IP ""
-2 Also log levels during TLS negotiation.
+2 Also enable verbose logging in the Postfix TLS
+library, log session cache operations, and enable OpenSSL logging
+of the progress of the SSL handshake.
 .br
 .IP ""
 3 Also log hexadecimal and ASCII dump of TLS negotiation
@@ -13616,6 +13827,9 @@ but do not require that clients use TLS encryption.
 Note: when invoked via "\fBsendmail \-bs\fR", Postfix will never offer
 STARTTLS due to insufficient privileges to access the server private
 key. This is intended behavior.
+.PP
+This feature is deprecated as of Postfix 3.9. Specify
+smtpd_tls_security_level instead.
 .PP
 This feature is available in Postfix 2.2 and later. With
 Postfix 2.3 and later use smtpd_tls_security_level instead.
@@ -14690,6 +14904,9 @@ Enforcement mode: require that SMTP servers use TLS encryption.
 See smtp_enforce_tls for further details. Use
 tlsproxy_client_security_level instead.
 .PP
+This feature is deprecated as of Postfix 3.9. Specify
+tlsproxy_client_security_level instead.
+.PP
 This feature is available in Postfix 3.4 and later.
 .SH tlsproxy_client_fingerprint_digest (default: $smtp_tls_fingerprint_digest)
 The message digest algorithm used to construct remote TLS server
@@ -14725,6 +14942,9 @@ Optional lookup tables with the Postfix \fBtlsproxy\fR(8) client TLS
 usage policy by next\-hop destination and by remote TLS server
 hostname.  See smtp_tls_per_site for further details.
 .PP
+This feature is deprecated as of Postfix 3.9. Specify
+tlsproxy_client_policy_maps instead.
+.PP
 This feature is available in Postfix 3.4 and later.
 .SH tlsproxy_client_policy (default: $smtp_tls_policy_maps)
 Optional lookup tables with the Postfix \fBtlsproxy\fR(8) client TLS
@@ -14756,11 +14976,17 @@ Opportunistic mode: use TLS when a remote server announces TLS
 support. See smtp_use_tls for further details. Use
 tlsproxy_client_security_level instead.
 .PP
+This feature is deprecated as of Postfix 3.9. Specify
+tlsproxy_client_security_level instead.
+.PP
 This feature is available in Postfix 3.4 and later.
 .SH tlsproxy_enforce_tls (default: $smtpd_enforce_tls)
 Mandatory TLS: announce STARTTLS support to remote SMTP clients, and
 require that clients use TLS encryption. See smtpd_enforce_tls for
 further details. Use tlsproxy_tls_security_level instead.
+.PP
+This feature is deprecated as of Postfix 3.9. Specify
+tlsproxy_tls_security_level instead.
 .PP
 This feature is available in Postfix 2.8 and later.
 .SH tlsproxy_service_name (default: tlsproxy)
@@ -14828,6 +15054,8 @@ File with DH parameters that the Postfix \fBtlsproxy\fR(8) server
 should use with non\-export EDH ciphers. See smtpd_tls_dh1024_param_file
 for further details.
 .PP
+This feature is deprecated as of Postfix 3.9. Do not specify.
+.PP
 This feature is available in Postfix 2.8 and later.
 .SH tlsproxy_tls_dh512_param_file (default: $smtpd_tls_dh512_param_file)
 File with DH parameters that the Postfix \fBtlsproxy\fR(8) server
@@ -14869,6 +15097,8 @@ This feature is available in Postfix 2.8 and later.
 The Postfix \fBtlsproxy\fR(8) server security grade for ephemeral
 elliptic\-curve Diffie\-Hellman (EECDH) key exchange. See
 smtpd_tls_eecdh_grade for further details.
+.PP
+This feature is deprecated as of Postfix 3.9. Do not specify.
 .PP
 This feature is available in Postfix 2.8 and later.
 .SH tlsproxy_tls_enable_rpk (default: $smtpd_tls_enable_rpk)
@@ -14954,6 +15184,9 @@ This feature is available in Postfix 2.8 and later.
 Opportunistic TLS: announce STARTTLS support to remote SMTP clients,
 but do not require that clients use TLS encryption. See smtpd_use_tls
 for further details. Use tlsproxy_tls_security_level instead.
+.PP
+This feature is deprecated as of Postfix 3.9. Specify
+tlsproxy_tls_security_level instead.
 .PP
 This feature is available in Postfix 2.8 and later.
 .SH tlsproxy_watchdog_timeout (default: 10s)
@@ -15583,10 +15816,12 @@ from each original recipient.
 .PP
 This feature is available in Postfix 2.1 and later.
 .SH virtual_alias_maps (default: $virtual_maps)
-Optional lookup tables with aliases that apply to all recipients:
-\fBlocal\fR(8), virtual, and remote; this is unlike alias_maps that apply
+Optional lookup tables that are often searched with a full email
+address (including domain) and that apply to all recipients: \fBlocal\fR(8),
+virtual, and remote; this is unlike alias_maps that are only searched
+with an email address localpart (no domain) and that apply
 only to \fBlocal\fR(8) recipients.
-The table format and lookups
+The virtual_alias_maps table format and lookups
 are documented in \fBvirtual\fR(5). For an overview of Postfix address
 manipulations see the ADDRESS_REWRITING_README document.
 .PP

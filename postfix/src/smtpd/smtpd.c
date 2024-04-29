@@ -822,6 +822,20 @@
 /* .IP "\fBsmtpd_forbid_unauth_pipelining (Postfix >= 3.9: yes)\fR"
 /*	Disconnect remote SMTP clients that violate RFC 2920 (or 5321)
 /*	command pipelining constraints.
+/* .PP
+/*	Available in Postfix 3.9, 3.8.4, 3.7.9, 3.6.13, 3.5.23 and later:
+/* .IP "\fBsmtpd_forbid_bare_newline (Postfix >= 3.9: normalize)\fR"
+/*	Reject or restrict input lines from an SMTP client that end in
+/*	<LF> instead of the standard <CR><LF>.
+/* .IP "\fBsmtpd_forbid_bare_newline_exclusions ($mynetworks)\fR"
+/*	Exclude the specified clients from smtpd_forbid_bare_newline
+/*	enforcement.
+/* .PP
+/*	Available in Postfix 3.9, 3.8.5, 3.7.10, 3.6.14, 3.5.24 and
+/*	later:
+/* .IP "\fBsmtpd_forbid_bare_newline_reject_code (550)\fR"
+/*	The numerical Postfix SMTP server response code when rejecting a
+/*	request with "smtpd_forbid_bare_newline = reject".
 /* TARPIT CONTROLS
 /* .ad
 /* .fi
@@ -1533,6 +1547,11 @@ bool    var_relay_before_rcpt_checks;
 bool    var_smtpd_req_deadline;
 int     var_smtpd_min_data_rate;
 char   *var_hfrom_format;
+char   *var_smtpd_forbid_bare_lf;
+char   *var_smtpd_forbid_bare_lf_excl;
+int     var_smtpd_forbid_bare_lf_code;
+static int bare_lf_mask;
+static NAMADR_LIST *bare_lf_excl;
 
  /*
   * Silly little macros.
@@ -1630,6 +1649,43 @@ static DICT *smtpd_cmd_filter;
   * Parsed header_from_format setting.
   */
 int     smtpd_hfrom_format;
+
+ /*
+  * Bare LF and End-of-DATA controls (bare CR is handled elsewhere).
+  * 
+  * At the smtp_get*() line reader level, setting any of these flags in the
+  * smtp_detect_bare_lf variable enables the detection of bare newlines. The
+  * line reader will set the same flags in the smtp_got_bare_lf variable
+  * after it detects a bare newline, otherwise it clears smtp_got_bare_lf.
+  * 
+  * At the SMTP command level, the flags in smtp_got_bare_lf control whether
+  * commands ending in a bare newline are rejected.
+  * 
+  * At the DATA and BDAT content level, the flags in smtp_got_bare_lf control
+  * whether the standard End-of-DATA sequence CRLF.CRLF is required, and
+  * whether lines ending in bare newlines are rejected.
+  * 
+  * Postfix implements "delayed reject" after detecting a bare newline in BDAT
+  * or DATA content. The SMTP server delays a REJECT response until the
+  * command is finished, instead of replying and hanging up immediately. The
+  * End-of-DATA detection is secured with BARE_LF_FLAG_WANT_STD_EOD.
+  */
+#define BARE_LF_FLAG_WANT_STD_EOD	(1<<0)	/* Require CRLF.CRLF */
+#define BARE_LF_FLAG_REPLY_REJECT	(1<<1)	/* Reject bare newline */
+#define BARE_LF_FLAG_NOTE_LOG		(1<<2)	/* Note bare newline */
+
+#define IS_BARE_LF_WANT_STD_EOD(m)	((m) & BARE_LF_FLAG_WANT_STD_EOD)
+#define IS_BARE_LF_REPLY_REJECT(m)	((m) & BARE_LF_FLAG_REPLY_REJECT)
+#define IS_BARE_LF_NOTE_LOG(m)		((m) & BARE_LF_FLAG_NOTE_LOG)
+
+static const NAME_CODE bare_lf_mask_table[] = {
+    "normalize", BARE_LF_FLAG_WANT_STD_EOD,	/* Default */
+    "yes", BARE_LF_FLAG_WANT_STD_EOD,	/* Migration aid */
+    "note", BARE_LF_FLAG_WANT_STD_EOD | BARE_LF_FLAG_NOTE_LOG,
+    "reject", BARE_LF_FLAG_WANT_STD_EOD | BARE_LF_FLAG_REPLY_REJECT,
+    "no", 0,
+    0, -1,				/* error */
+};
 
 #ifdef USE_SASL_AUTH
 
@@ -3586,6 +3642,7 @@ static void receive_data_message(SMTPD_STATE *state,
     int     curr_rec_type;
     int     prev_rec_type;
     int     first = 1;
+    int     prev_got_bare_lf = 0;
 
     /*
      * If deadlines are enabled, increase the time budget as message content
@@ -3606,12 +3663,17 @@ static void receive_data_message(SMTPD_STATE *state,
      * XXX Deal with UNIX-style From_ lines at the start of message content
      * because sendmail permits it.
      */
-    for (prev_rec_type = 0; /* void */ ; prev_rec_type = curr_rec_type) {
+    for (prev_rec_type = 0; /* void */ ; prev_rec_type = curr_rec_type,
+	 prev_got_bare_lf = smtp_got_bare_lf) {
 	if (smtp_get(state->buffer, state->client, var_line_limit,
 		     SMTP_GET_FLAG_NONE) == '\n')
 	    curr_rec_type = REC_TYPE_NORM;
 	else
 	    curr_rec_type = REC_TYPE_CONT;
+	if (IS_BARE_LF_REPLY_REJECT(smtp_got_bare_lf))
+	    state->err |= CLEANUP_STAT_BARE_LF;
+	else if (IS_BARE_LF_NOTE_LOG(smtp_got_bare_lf))
+	    state->notes |= SMTPD_NOTE_BARE_LF;
 	start = vstring_str(state->buffer);
 	len = VSTRING_LEN(state->buffer);
 	if (first) {
@@ -3624,9 +3686,14 @@ static void receive_data_message(SMTPD_STATE *state,
 	    if (len > 0 && IS_SPACE_TAB(start[0]))
 		out_record(out_stream, REC_TYPE_NORM, "", 0);
 	}
-	if (prev_rec_type != REC_TYPE_CONT && *start == '.'
-	    && (proxy == 0 ? (++start, --len) == 0 : len == 1))
-	    break;
+	if (prev_rec_type != REC_TYPE_CONT && *start == '.') {
+	    if (len == 1 && IS_BARE_LF_WANT_STD_EOD(smtp_detect_bare_lf)
+		&& (smtp_got_bare_lf || prev_got_bare_lf))
+		/* Do not store or send to proxy filter. */
+		continue;
+	    if (proxy == 0 ? (++start, --len) == 0 : len == 1)
+		break;
+	}
 	if (state->err == CLEANUP_STAT_OK) {
 	    if (ENFORCING_SIZE_LIMIT(var_message_limit)
 		&& var_message_limit - state->act_size < len + 2) {
@@ -3779,6 +3846,11 @@ static int common_post_message_handling(SMTPD_STATE *state)
 	else
 	    smtpd_chat_reply(state,
 			     "250 2.0.0 Ok: queued as %s", state->queue_id);
+    } else if ((state->err & CLEANUP_STAT_BARE_LF) != 0) {
+	state->error_mask |= MAIL_ERROR_PROTOCOL;
+	log_whatsup(state, "reject", "bare <LF> received");
+	smtpd_chat_reply(state, "%d 5.5.2 %s Error: bare <LF> received",
+			 var_smtpd_forbid_bare_lf_code, var_myhostname);
     } else if (why && IS_SMTP_REJECT(STR(why))) {
 	state->error_mask |= MAIL_ERROR_POLICY;
 	smtpd_chat_reply(state, "%s", STR(why));
@@ -4083,14 +4155,31 @@ static int bdat_cmd(SMTPD_STATE *state, int argc, SMTPD_TOKEN *argv)
 	/*
 	 * Read lines from the fragment. The last line may continue in the
 	 * next fragment, or in the next chunk.
+	 * 
+	 * If smtp_get_noexcept() stopped after var_line_limit bytes and did not
+	 * emit a queue file record, then that means smtp_get_noexcept()
+	 * stopped after CR and hit EOF as it tried to find out if the next
+	 * byte is LF. In that case, read the first byte from the next
+	 * fragment or chunk, and if that first byte is LF, then
+	 * smtp_get_noexcept() strips off the trailing CRLF and returns '\n'
+	 * as it always does after reading a complete line.
 	 */
 	do {
+	    int     can_read = var_line_limit - LEN(state->bdat_get_buffer);
+
 	    if (smtp_get_noexcept(state->bdat_get_buffer,
 				  state->bdat_get_stream,
-				  var_line_limit,
+				  can_read > 0 ? can_read : 1,	/* Peek one */
 				  SMTP_GET_FLAG_APPEND) == '\n') {
 		/* Stopped at end-of-line. */
 		curr_rec_type = REC_TYPE_NORM;
+	    } else if (LEN(state->bdat_get_buffer) > var_line_limit) {
+		/* Undo peeking, and output the buffer as REC_TYPE_CONT. */
+		vstream_ungetc(state->bdat_get_stream,
+			       vstring_end(state->bdat_get_buffer)[-1]);
+		vstring_truncate(state->bdat_get_buffer,
+				 LEN(state->bdat_get_buffer) - 1);
+		curr_rec_type = REC_TYPE_CONT;
 	    } else if (!vstream_feof(state->bdat_get_stream)) {
 		/* Stopped at var_line_limit. */
 		curr_rec_type = REC_TYPE_CONT;
@@ -4103,6 +4192,10 @@ static int bdat_cmd(SMTPD_STATE *state, int argc, SMTPD_TOKEN *argv)
 		/* Skip the out_record() and VSTRING_RESET() calls below. */
 		break;
 	    }
+	    if (IS_BARE_LF_REPLY_REJECT(smtp_got_bare_lf))
+		state->err |= CLEANUP_STAT_BARE_LF;
+	    else if (IS_BARE_LF_NOTE_LOG(smtp_got_bare_lf))
+		state->notes |= SMTPD_NOTE_BARE_LF;
 	    start = vstring_str(state->bdat_get_buffer);
 	    len = VSTRING_LEN(state->bdat_get_buffer);
 	    if (state->err == CLEANUP_STAT_OK) {
@@ -4754,6 +4847,9 @@ static int xclient_cmd(SMTPD_STATE *state, int argc, SMTPD_TOKEN *argv)
      */
     xclient_allowed =
 	namadr_list_match(xclient_hosts, state->name, state->addr);
+    smtp_detect_bare_lf = (SMTPD_STAND_ALONE((state)) == 0 && bare_lf_mask
+	    && !namadr_list_match(bare_lf_excl, state->name, state->addr)) ?
+	bare_lf_mask : 0;
     /* NOT: tls_reset() */
     if (got_helo == 0)
 	helo_reset(state);
@@ -5402,25 +5498,33 @@ static void tls_reset(SMTPD_STATE *state)
 
 #endif
 
-#if !defined(USE_TLS) || !defined(USE_SASL_AUTH)
-
 /* unimpl_cmd - dummy for functionality that is not compiled in */
 
 static int unimpl_cmd(SMTPD_STATE *state, int argc, SMTPD_TOKEN *unused_argv)
 {
+    const char *err;
 
     /*
      * When a connection is closed we want to log the request counts for
      * unimplemented STARTTLS or AUTH commands separately, instead of logging
      * those commands as "unknown". By handling unimplemented commands with
      * this dummy function, we avoid messing up the command processing loop.
+     * Note: the xxfi_unknown() Milter callback has only two valid returns:
+     * it must either tempfail or reject.
      */
     state->error_mask |= MAIL_ERROR_PROTOCOL;
-    smtpd_chat_reply(state, "502 5.5.1 Error: command not implemented");
+    if (state->milters != 0
+	&& (err = milter_unknown_event(state->milters,
+				       STR(state->buffer))) != 0
+	&& err[0] == '4') {
+	smtpd_chat_reply(state, "%s", err);
+    } else {
+	if (err[0] != '5')
+	    msg_warn("unexpected SMFIC_UNKNOWN response: %s", err);
+	smtpd_chat_reply(state, "502 5.5.1 Error: command not implemented");
+    }
     return (-1);
 }
-
-#endif
 
  /*
   * The table of all SMTP commands that we know. Set the junk limit flag on
@@ -5446,6 +5550,8 @@ typedef struct SMTPD_CMD {
 #define SMTPD_CMD_FLAG_PRE_TLS	(1<<1)	/* allow before STARTTLS */
 #define SMTPD_CMD_FLAG_LAST	(1<<2)	/* last in PIPELINING command group */
 
+static int  help_cmd(SMTPD_STATE *, int, SMTPD_TOKEN *);
+
 static SMTPD_CMD smtpd_cmd_table[] = {
     {SMTPD_CMD_HELO, helo_cmd, SMTPD_CMD_FLAG_LIMIT | SMTPD_CMD_FLAG_PRE_TLS | SMTPD_CMD_FLAG_LAST,},
     {SMTPD_CMD_EHLO, ehlo_cmd, SMTPD_CMD_FLAG_LIMIT | SMTPD_CMD_FLAG_PRE_TLS | SMTPD_CMD_FLAG_LAST,},
@@ -5470,11 +5576,46 @@ static SMTPD_CMD smtpd_cmd_table[] = {
     {SMTPD_CMD_VRFY, vrfy_cmd, SMTPD_CMD_FLAG_LIMIT | SMTPD_CMD_FLAG_LAST,},
     {SMTPD_CMD_ETRN, etrn_cmd, SMTPD_CMD_FLAG_LIMIT,},
     {SMTPD_CMD_QUIT, quit_cmd, SMTPD_CMD_FLAG_PRE_TLS,},
+    {SMTPD_CMD_HELP, help_cmd, SMTPD_CMD_FLAG_PRE_TLS,},
+#ifdef TEST_SMTPD_UNIMPL
+    {"unimpl", unimpl_cmd,},
+#endif
     {0,},
 };
 
 static STRING_LIST *smtpd_noop_cmds;
 static STRING_LIST *smtpd_forbid_cmds;
+
+/* help_cmd - process HELP command */
+
+static int help_cmd(SMTPD_STATE *state, int unused_argc, SMTPD_TOKEN *unused_argv)
+{
+    ARGV   *argv = argv_alloc(sizeof(smtpd_cmd_table)
+			      / sizeof(*smtpd_cmd_table));
+    VSTRING *buf = vstring_alloc(100);
+    SMTPD_CMD *cmdp;
+
+    /*
+     * Return a list of implemented commands.
+     * 
+     * The HELP command does not suppress commands that can be dynamically
+     * disabled in the EHLO response or through access control. That would
+     * require refactoring the EHLO feature-suppression and per-feature
+     * access control, so that they can be reused (not duplicated) here.
+     * 
+     * The HELP command does not provide information that makes Postfix easier
+     * to fingerprint, such as software name, version, or build information.
+     */
+    for (cmdp = smtpd_cmd_table; cmdp->name != 0; cmdp++)
+	if (cmdp->action != unimpl_cmd)
+	    argv_add(argv, cmdp->name, ARGV_END);
+    argv_sort(argv);
+    smtpd_chat_reply(state, "214 2.0.0 Commands: %s",
+		     argv_join(buf, argv, ' '));
+    vstring_free(buf);
+    argv_free(argv);
+    return (0);
+}
 
 /* smtpd_flag_ill_pipelining - flag pipelining protocol violation */
 
@@ -5795,6 +5936,15 @@ static void smtpd_proto(SMTPD_STATE *state)
 	    }
 	    watchdog_pat();
 	    smtpd_chat_query(state);
+	    if (IS_BARE_LF_REPLY_REJECT(smtp_got_bare_lf)) {
+		log_whatsup(state, "reject", "bare <LF> received");
+		state->error_mask |= MAIL_ERROR_PROTOCOL;
+		smtpd_chat_reply(state, "%d 5.5.2 %s Error: bare <LF> received",
+			     var_smtpd_forbid_bare_lf_code, var_myhostname);
+		break;
+	    }
+	    if (IS_BARE_LF_NOTE_LOG(smtp_got_bare_lf))
+		state->notes |= SMTPD_NOTE_BARE_LF;
 	    /* Safety: protect internal interfaces against malformed UTF-8. */
 	    if (var_smtputf8_enable
 		&& valid_utf8_stringz(STR(state->buffer)) == 0) {
@@ -5868,13 +6018,18 @@ static void smtpd_proto(SMTPD_STATE *state)
 	    }
 	    /* state->access_denied == 0 || cmdp->action == quit_cmd */
 	    if (cmdp->name == 0) {
+		/* See unimpl_cmd() for valid xxfi_unknown() return values. */
 		if (state->milters != 0
 		    && (err = milter_unknown_event(state->milters,
-						   argv[0].strval)) != 0
-		    && (err = check_milter_reply(state, err)) != 0) {
+						   STR(state->buffer))) != 0
+		    && err[0] == '4') {
 		    smtpd_chat_reply(state, "%s", err);
-		} else
-		    smtpd_chat_reply(state, "500 5.5.2 Error: command not recognized");
+		} else {
+		    if (err[0] != '5')
+			msg_warn("unexpected SMFIC_UNKNOWN response: %s", err);
+		    smtpd_chat_reply(state,
+				 "500 5.5.2 Error: command not recognized");
+		}
 		state->error_mask |= MAIL_ERROR_PROTOCOL;
 		state->error_count++;
 		continue;
@@ -5981,11 +6136,12 @@ static void smtpd_proto(SMTPD_STATE *state)
 
 /* smtpd_format_cmd_stats - format per-command statistics */
 
-static char *smtpd_format_cmd_stats(VSTRING *buf)
+static char *smtpd_format_cmd_stats(SMTPD_STATE *state)
 {
     SMTPD_CMD *cmdp;
     int     all_success = 0;
     int     all_total = 0;
+    VSTRING *buf = state->buffer;
 
     /*
      * Log the statistics. Note that this loop produces no output when no
@@ -6029,6 +6185,13 @@ static char *smtpd_format_cmd_stats(VSTRING *buf)
     vstring_sprintf_append(buf, " commands=%d", all_success);
     if (all_success != all_total || all_total == 0)
 	vstring_sprintf_append(buf, "/%d", all_total);
+
+    /*
+     * Log aggregated warnings.
+     */
+    if (state->notes & SMTPD_NOTE_BARE_LF)
+	vstring_sprintf_append(buf, " notes=bare_lf");
+
     return (lowercase(STR(buf)));
 }
 
@@ -6144,6 +6307,13 @@ static void smtpd_service(VSTREAM *stream, char *service, char **argv)
 	namadr_list_match(xforward_hosts, state.name, state.addr);
 
     /*
+     * Reject or normalize bare LF, with compatibility exclusions.
+     */
+    smtp_detect_bare_lf = (SMTPD_STAND_ALONE((&state)) == 0 && bare_lf_mask
+	      && !namadr_list_match(bare_lf_excl, state.name, state.addr)) ?
+	bare_lf_mask : 0;
+
+    /*
      * See if we need to turn on verbose logging for this client.
      */
     debug_peer_check(state.name, state.addr);
@@ -6163,7 +6333,7 @@ static void smtpd_service(VSTREAM *stream, char *service, char **argv)
      * connection time.
      */
     msg_info("disconnect from %s%s", state.namaddr,
-	     smtpd_format_cmd_stats(state.buffer));
+	     smtpd_format_cmd_stats(&state));
     teardown_milters(&state);			/* duplicates xclient_cmd */
     smtpd_state_reset(&state);
     debug_peer_restore();
@@ -6204,6 +6374,14 @@ static void pre_jail_init(char *unused_name, char **unused_argv)
     hogger_list = namadr_list_init(VAR_SMTPD_HOGGERS, MATCH_FLAG_RETURN
 				   | match_parent_style(VAR_SMTPD_HOGGERS),
 				   var_smtpd_hoggers);
+    bare_lf_excl = namadr_list_init(VAR_SMTPD_FORBID_BARE_LF_EXCL,
+				    MATCH_FLAG_RETURN
+				    | match_parent_style(VAR_MYNETWORKS),
+				    var_smtpd_forbid_bare_lf_excl);
+    if ((bare_lf_mask = name_code(bare_lf_mask_table, NAME_CODE_FLAG_NONE,
+				  var_smtpd_forbid_bare_lf)) < 0)
+	msg_fatal("bad parameter value: '%s = %s'",
+		  VAR_SMTPD_FORBID_BARE_LF, var_smtpd_forbid_bare_lf);
 
     /*
      * Open maps before dropping privileges so we can read passwords etc.
@@ -6503,6 +6681,7 @@ int     main(int argc, char **argv)
 	VAR_VIRT_MAILBOX_CODE, DEF_VIRT_MAILBOX_CODE, &var_virt_mailbox_code, 0, 0,
 	VAR_RELAY_RCPT_CODE, DEF_RELAY_RCPT_CODE, &var_relay_rcpt_code, 0, 0,
 	VAR_PLAINTEXT_CODE, DEF_PLAINTEXT_CODE, &var_plaintext_code, 0, 0,
+	VAR_SMTPD_FORBID_BARE_LF_CODE, DEF_SMTPD_FORBID_BARE_LF_CODE, &var_smtpd_forbid_bare_lf_code, 500, 599,
 	VAR_SMTPD_CRATE_LIMIT, DEF_SMTPD_CRATE_LIMIT, &var_smtpd_crate_limit, 0, 0,
 	VAR_SMTPD_CCONN_LIMIT, DEF_SMTPD_CCONN_LIMIT, &var_smtpd_cconn_limit, 0, 0,
 	VAR_SMTPD_CMAIL_LIMIT, DEF_SMTPD_CMAIL_LIMIT, &var_smtpd_cmail_limit, 0, 0,
@@ -6686,6 +6865,8 @@ int     main(int argc, char **argv)
 	VAR_SMTPD_DNS_RE_FILTER, DEF_SMTPD_DNS_RE_FILTER, &var_smtpd_dns_re_filter, 0, 0,
 	VAR_SMTPD_REJ_FTR_MAPS, DEF_SMTPD_REJ_FTR_MAPS, &var_smtpd_rej_ftr_maps, 0, 0,
 	VAR_HFROM_FORMAT, DEF_HFROM_FORMAT, &var_hfrom_format, 1, 0,
+	VAR_SMTPD_FORBID_BARE_LF_EXCL, DEF_SMTPD_FORBID_BARE_LF_EXCL, &var_smtpd_forbid_bare_lf_excl, 0, 0,
+	VAR_SMTPD_FORBID_BARE_LF, DEF_SMTPD_FORBID_BARE_LF, &var_smtpd_forbid_bare_lf, 1, 0,
 	0,
     };
     static const CONFIG_RAW_TABLE raw_table[] = {

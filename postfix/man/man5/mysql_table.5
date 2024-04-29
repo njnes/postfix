@@ -76,6 +76,12 @@ localhost over TCP you have to specify
 .nf
     hosts = 127.0.0.1
 .fi
+
+NOTE: if "hosts" specifies one load balancer and no alternative
+servers, specify the load balancer multiple times in the
+"hosts" line. Without the duplicate info, the Postfix MySQL
+client would not reconnect immediately to the same load
+balancer after a MySQL server failure.
 .IP "\fBuser\fR"
 .IP "\fBpassword\fR"
 The user name and password to log into the mysql server.
@@ -97,6 +103,16 @@ This parameter is available with Postfix 3.9 and later.
 With earlier Postfix versions, the default was chosen by
 the MySQL implementation (\fButf8mb4\fR as of MySQL 8.0,
 \fBlatin1\fR historically).
+.IP "\fBidle_interval (default: 60)\fR"
+The number of seconds after which an idle database connection
+will be closed.
+
+This feature is available in Postfix 3.9 and later.
+.IP "\fBretry_interval (default: 60)\fR"
+The number of seconds that a database connection will be
+skipped after an error.
+
+This feature is available in Postfix 3.9 and later.
 .IP "\fBquery\fR"
 The SQL query template used to search the database, where \fB%s\fR
 is a substitute for the address Postfix is trying to resolve,

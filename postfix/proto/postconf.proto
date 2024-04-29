@@ -489,12 +489,14 @@ alias_database = hash:/etc/mail/aliases
 %PARAM alias_maps see "postconf -d" output
 
 <p>
-Optional lookup tables with aliases that apply only to local(8)
-recipients; this is unlike virtual_alias_maps that apply to all
-recipients: local(8), virtual, and remote.
-The table format and lookups are documented in aliases(5). For an
-overview of Postfix address manipulations see the ADDRESS_REWRITING_README
-document. </p>
+Optional lookup tables that are searched only with an email address
+localpart (no domain) and that apply only to local(8) recipients;
+this is unlike virtual_alias_maps that are often searched with a
+full email address (including domain) and that apply to all recipients:
+local(8), virtual, and remote.
+The alias_maps table format and lookups are documented in aliases(5).
+For an overview of Postfix address manipulations see the
+ADDRESS_REWRITING_README document. </p>
 
 <p>
 Specify zero or more "type:name" lookup tables, separated by
@@ -2733,6 +2735,11 @@ and later.</dd>
 
 <dd>The domain part of the recipient address. </dd>
 
+<dt><b>ENVID</b></dt>
+
+<dd>The optional RFC 3461 envelope ID. Available in Postfix version
+3.9 and later</dd>
+
 <dt><b>EXTENSION</b></dt>
 
 <dd>The optional address extension. </dd>
@@ -3925,12 +3932,19 @@ gateway host instead.
 </p>
 
 <p>
-In the case of SMTP or LMTP delivery, specify one or more destinations
-in the form of a domain name, hostname, hostname:port, [hostname]:port,
-[hostaddress] or [hostaddress]:port, separated by comma or whitespace.
-The form [hostname] turns off MX lookups. Multiple destinations are
-supported in Postfix 3.5 and later.
+In the case of SMTP delivery, specify one or more destinations in
+the form of a domain name, hostname, hostname:service, [hostname]:service,
+[hostaddress] or [hostaddress]:service, separated by comma or whitespace.
+The form [hostname] turns off MX or SRV lookups. Multiple destinations
+are supported in Postfix 3.5 and later. Each destination is tried
+in the specified order.
 </p>
+
+<p> If an SMTP destination is a load balancer, and there are no
+alternative destinations, specify the load balancer multiple times.
+Without the duplicate info, the Postfix SMTP client would not
+reconnect immediately to the same load balancer after a remote SMTP
+server failure. </p>
 
 <p>
 If you're connected via UUCP, see the UUCP_README file for useful
@@ -5297,9 +5311,8 @@ pubkey_fingerprint } } </dd>
 
 <dt><b><a name="check_client_access">check_client_access</a> <i><a href="DATABASE_README.html">type:table</a></i></b></dt>
 
-<dd>Search the specified access database for the client hostname,
-parent domains, client IP address, or networks obtained by stripping
-least significant octets. See the access(5) manual page for details. </dd>
+<dd>Search the specified access database for the client hostname
+or IP address. See the access(5) manual page for details. </dd>
 
 <dt><b><a name="check_client_a_access">check_client_a_access</a> <i><a href="DATABASE_README.html">type:table</a></i></b></dt>
 
@@ -5330,8 +5343,7 @@ available in Postfix 2.7 and later.  </dd>
 <dt><b><a name="check_reverse_client_hostname_access">check_reverse_client_hostname_access</a> <i><a href="DATABASE_README.html">type:table</a></i></b></dt>
 
 <dd>Search the specified access database for the unverified reverse
-client hostname, parent domains, client IP address, or networks
-obtained by stripping least significant octets. See the access(5)
+client hostname or IP address. See the access(5)
 manual page for details.  Note: a result of "OK" is not allowed for
 safety reasons.  Instead, use DUNNO in order to exclude specific
 hosts from denylists.  This feature is available in Postfix 2.6
@@ -5804,8 +5816,8 @@ received with the ETRN command.
 
 <dt><b><a name="check_etrn_access">check_etrn_access</a> <i><a href="DATABASE_README.html">type:table</a></i></b></dt>
 
-<dd>Search the specified access database for the ETRN domain name
-or its parent domains. See the access(5) manual page for details.
+<dd>Search the specified access database for the ETRN domain name.
+See the access(5) manual page for details.
 </dd>
 
 </dl>
@@ -5920,7 +5932,7 @@ received with the HELO or EHLO command.
 <dt><b><a name="check_helo_access">check_helo_access</a> <i><a href="DATABASE_README.html">type:table</a></i></b></dt>
 
 <dd>Search the specified access(5) database for the HELO or EHLO
-hostname or parent domains, and execute the corresponding action.
+hostname, and execute the corresponding action.
 Note: specify "smtpd_helo_required = yes" to fully enforce this
 restriction (without "smtpd_helo_required = yes", a client can
 simply skip check_helo_access by not sending HELO or EHLO).  </dd>
@@ -6215,8 +6227,7 @@ that is received with the RCPT TO command.
 <dt><b><a name="check_recipient_access">check_recipient_access</a> <i><a href="DATABASE_README.html">type:table</a></i></b></dt>
 
 <dd>Search the specified access(5) database for the resolved RCPT
-TO address, domain, parent domains, or localpart@, and execute the
-corresponding action.  </dd>
+TO address, and execute the corresponding action.  </dd>
 
 <dt><b><a name="check_recipient_a_access">check_recipient_a_access</a> <i><a href="DATABASE_README.html">type:table</a></i></b></dt>
 
@@ -6730,8 +6741,7 @@ received with the MAIL FROM command.
 <dt><b><a name="check_sender_access">check_sender_access</a> <i><a href="DATABASE_README.html">type:table</a></i></b></dt>
 
 <dd>Search the specified access(5) database for the MAIL FROM
-address, domain, parent domains, or localpart@, and execute the
-corresponding action. </dd>
+address, and execute the corresponding action. </dd>
 
 <dt><b><a name="check_sender_a_access">check_sender_a_access</a> <i><a href="DATABASE_README.html">type:table</a></i></b></dt>
 
@@ -7309,10 +7319,12 @@ This feature is available in Postfix 2.1 and later.
 %PARAM virtual_alias_maps $virtual_maps
 
 <p>
-Optional lookup tables with aliases that apply to all recipients:
-local(8), virtual, and remote; this is unlike alias_maps that apply
+Optional lookup tables that are often searched with a full email
+address (including domain) and that apply to all recipients: local(8),
+virtual, and remote; this is unlike alias_maps that are only searched
+with an email address localpart (no domain) and that apply
 only to local(8) recipients.
-The table format and lookups
+The virtual_alias_maps table format and lookups
 are documented in virtual(5). For an overview of Postfix address
 manipulations see the ADDRESS_REWRITING_README document.
 </p>
@@ -8421,6 +8433,8 @@ smtp      unix  -       -       n       -       -       smtp
 relay     unix  -       -       n       -       -       smtp
     -o syslog_name=postfix/$service_name
 </pre>
+
+<p> This feature is available in Postfix 3.3 and later. </p>
 
 %PARAM process_id read-only
 
@@ -9796,7 +9810,9 @@ if client certificate verification is not required.  With Postfix 2.8 and
 earlier, log the summary message, peer certificate summary information
 and unconditionally log trust-chain verification errors.  </dd>
 
-<dt> </dt> <dd> 2 Also log levels during TLS negotiation. </dd>
+<dt> </dt> <dd> 2 Also enable verbose logging in the Postfix TLS
+library, log session cache operations, and enable OpenSSL logging
+of the progress of the SSL handshake. </dd>
 
 <dt> </dt> <dd> 3 Also log hexadecimal and ASCII dump of TLS negotiation
 process. </dd>
@@ -9831,6 +9847,9 @@ but do not require that clients use TLS encryption. </p>
 STARTTLS due to insufficient privileges to access the server private
 key. This is intended behavior. </p>
 
+<p> This feature is deprecated as of Postfix 3.9. Specify
+smtpd_tls_security_level instead. </p>
+
 <p> This feature is available in Postfix 2.2 and later. With
 Postfix 2.3 and later use smtpd_tls_security_level instead. </p>
 
@@ -9846,6 +9865,9 @@ server.  This option is therefore off by default. </p>
 <p> Note 2: when invoked via "<b>sendmail -bs</b>", Postfix will never offer
 STARTTLS due to insufficient privileges to access the server private  
 key. This is intended behavior. </p>
+
+<p> This feature is deprecated as of Postfix 3.9. Specify
+smtpd_tls_security_level instead. </p>
 
 <p> This feature is available in Postfix 2.2 and later. With
 Postfix 2.3 and later use smtpd_tls_security_level instead. </p>
@@ -10277,7 +10299,9 @@ verification errors if server certificate verification is not required.
 With Postfix 2.8 and earlier, log the summary message and unconditionally
 log trust-chain verification errors.  </dd>
 
-<dt> </dt> <dd> 2 Also log levels during TLS negotiation.  </dd>
+<dt> </dt> <dd> 2 Also enable verbose logging in the Postfix TLS
+library, log session cache operations, and enable OpenSSL logging
+of the progress of the SSL handshake. </dd>
 
 <dt> </dt> <dd> 3 Also log the hexadecimal and ASCII dump of the
 TLS negotiation process.  </dd>
@@ -10987,6 +11011,9 @@ configuration parameter.  See there for details. </p>
 <p> The LMTP-specific version of the smtp_tls_per_site configuration
 parameter.  See there for details. </p>
 
+<p> This feature is deprecated as of Postfix 3.9. Specify
+lmtp_tls_policy_maps instead. </p>
+
 <p> This feature is available in Postfix 2.3 and later. </p>
 
 %PARAM lmtp_generic_maps
@@ -11092,12 +11119,18 @@ configuration parameter.  See there for details. </p>
 <p> The LMTP-specific version of the smtp_use_tls configuration
 parameter.  See there for details. </p>
 
+<p> This feature is deprecated as of Postfix 3.9. Specify
+lmtp_tls_security_level instead. </p>
+
 <p> This feature is available in Postfix 2.3 and later. </p>
 
 %PARAM lmtp_enforce_tls no
 
 <p> The LMTP-specific version of the smtp_enforce_tls configuration
 parameter.  See there for details. </p>
+
+<p> This feature is deprecated as of Postfix 3.9. Specify
+lmtp_tls_security_level instead. </p>
 
 <p> This feature is available in Postfix 2.3 and later. </p>
 
@@ -15729,6 +15762,9 @@ for details. </p>
 require that clients use TLS encryption. See smtpd_enforce_tls for
 further details. Use tlsproxy_tls_security_level instead. </p>
 
+<p> This feature is deprecated as of Postfix 3.9. Specify
+tlsproxy_tls_security_level instead. </p>
+
 <p> This feature is available in Postfix 2.8 and later. </p>
 
 %PARAM tlsproxy_tls_CAfile $smtpd_tls_CAfile
@@ -15803,6 +15839,8 @@ smtpd_tls_dcert_file for further details.  </p>
 should use with non-export EDH ciphers. See smtpd_tls_dh1024_param_file
 for further details. </p>
 
+<p> This feature is deprecated as of Postfix 3.9. Do not specify. </p>
+
 <p> This feature is available in Postfix 2.8 and later. </p>
 
 %PARAM tlsproxy_tls_dh512_param_file $smtpd_tls_dh512_param_file
@@ -15854,6 +15892,8 @@ the "tlsproxy_tls_chain_files" parameter. </p>
 <p> The Postfix tlsproxy(8) server security grade for ephemeral
 elliptic-curve Diffie-Hellman (EECDH) key exchange. See
 smtpd_tls_eecdh_grade for further details. </p>
+
+<p> This feature is deprecated as of Postfix 3.9. Do not specify. </p>
 
 <p> This feature is available in Postfix 2.8 and later. </p>
 
@@ -15958,6 +15998,9 @@ shared by all three services, namely smtpd_tls_session_cache_timeout. </p>
 <p> Opportunistic TLS: announce STARTTLS support to remote SMTP clients,
 but do not require that clients use TLS encryption. See smtpd_use_tls
 for further details. Use tlsproxy_tls_security_level instead. </p>
+
+<p> This feature is deprecated as of Postfix 3.9. Specify
+tlsproxy_tls_security_level instead. </p>
 
 <p> This feature is available in Postfix 2.8 and later. </p>
 
@@ -17762,6 +17805,9 @@ was previously called tlsproxy_client_level. </p>
 usage policy by next-hop destination and by remote TLS server
 hostname.  See smtp_tls_per_site for further details. </p>
 
+<p> This feature is deprecated as of Postfix 3.9. Specify
+tlsproxy_client_policy_maps instead. </p>
+
 <p> This feature is available in Postfix 3.4 and later. </p>
 
 %PARAM tlsproxy_client_policy $smtp_tls_policy_maps
@@ -17788,12 +17834,18 @@ was previously called tlsproxy_client_policy. </p>
 support. See smtp_use_tls for further details. Use
 tlsproxy_client_security_level instead. </p>
 
+<p> This feature is deprecated as of Postfix 3.9. Specify
+tlsproxy_client_security_level instead. </p>
+
 <p> This feature is available in Postfix 3.4 and later. </p>
 
 %PARAM tlsproxy_client_enforce_tls $smtp_enforce_tls
 
 <p> Enforcement mode: require that SMTP servers use TLS encryption.
 See smtp_enforce_tls for further details. Use
+tlsproxy_client_security_level instead. </p>
+
+<p> This feature is deprecated as of Postfix 3.9. Specify
 tlsproxy_client_security_level instead. </p>
 
 <p> This feature is available in Postfix 3.4 and later. </p>
@@ -19049,6 +19101,179 @@ MinProtocol = TLSv1
 
 <p> This feature is available in Postfix &ge; 3.9, 3.8.1, 3.7.6,
 3.6.10, and 3.5.20. </p>
+
+%PARAM smtpd_forbid_bare_newline Postfix &ge; 3.9: normalize
+
+<p> Reject or restrict input lines from an SMTP client that end in
+&lt;LF&gt; instead of the standard &lt;CR&gt;&lt;LF&gt;. Such line
+endings are commonly allowed with UNIX-based SMTP servers, but they
+violate RFC 5321, and allowing such line endings can make a server
+vulnerable to <a href="https://www.postfix.org/smtp-smuggling.html">
+SMTP smuggling</a>.  </p>
+
+<p> Specify one of the following values (case does not matter): </p>
+
+<dl compact>
+
+<dt> <b>normalize</b> (default for Postfix &ge; 3.9) </dt>
+<dd> Require the standard
+End-of-DATA sequence &lt;CR&gt;&lt;LF&gt;.&lt;CR&gt;&lt;LF&gt;.
+Otherwise, allow command or message content lines ending in the
+non-standard &lt;LF&gt;, and process them as if the client sent the
+standard &lt;CR&gt;&lt;LF&gt;. <br> <br> This maintains compatibility
+with many legitimate SMTP client applications that send a mix of
+standard and non-standard line endings, but will fail to receive
+email from client implementations that do not terminate DATA content
+with the standard End-of-DATA sequence
+&lt;CR&gt;&lt;LF&gt;.&lt;CR&gt;&lt;LF&gt;. <br> <br> Such clients
+can be excluded with smtpd_forbid_bare_newline_exclusions. </dd>
+
+<dt> <b>note</b> </dt> <dd> Same as "normalize", but also notes in
+the log whether the Postfix SMTP server received any lines with
+"bare &lt;LF&gt;". The information is formatted as "<tt>disconnect
+from name[address] ...  notes=bare_lf</tt>". The notes value is
+expected to become a list of comma-separated names. <br> <br> This
+feature is available in Postfix 3.9 and later. </dd>
+
+<dt> <b>yes</b> </dt> <dd> Compatibility alias for <b>normalize</b>. </dd>
+
+<dt> <b>reject</b> </dt> <dd> Require the standard End-of-DATA
+sequence &lt;CR&gt;&lt;LF&gt;.&lt;CR&gt;&lt;LF&gt;. Reject a command
+or message content when a line contains bare &lt;LF&gt;, log a "bare
+&lt;LF&gt; received" error, and reply with the SMTP status code in
+$smtpd_forbid_bare_newline_reject_code. <br> <br> This will reject
+email from SMTP clients that send any non-standard line endings
+such as web applications, netcat, or load balancer health checks.
+<br> <br> This will also reject email from services that use BDAT
+to send MIME text containing a bare newline (RFC 3030 Section 3
+requires canonical MIME format for text message types, defined in
+RFC 2045 Sections 2.7 and 2.8). <br> <br> Such clients can be
+excluded with smtpd_forbid_bare_newline_exclusions (or, in the case
+of BDAT violations, BDAT can be selectively disabled with
+smtpd_discard_ehlo_keyword_address_maps, or globally disabled with
+smtpd_discard_ehlo_keywords). </dd>
+
+<dt> <b>no</b> (default for Postfix &lt; 3.9) </dt>
+<dd> Do not require the standard End-of-DATA
+sequence &lt;CR&gt;&lt;LF&gt;.&lt;CR&gt;&lt;LF&gt;. Always process
+a bare &lt;LF&gt; as if the client sent &lt;CR&gt;&lt;LF&gt;. This
+option is fully backwards compatible, but is not recommended for
+an Internet-facing SMTP server, because it is vulnerable to <a
+href="https://www.postfix.org/smtp-smuggling.html"> SMTP smuggling</a>.
+</dd>
+
+</dl>
+
+<p> Recommended settings: </p>
+
+<blockquote>
+<pre>
+# Require the standard End-of-DATA sequence &lt;CR&gt;&lt;LF&gt;.&lt;CR&gt;&lt;LF&gt;.
+# Otherwise, allow bare &lt;LF&gt; and process it as if the client sent
+# &lt;CR&gt;&lt;LF&gt;.
+#
+# This maintains compatibility with many legitimate SMTP client
+# applications that send a mix of standard and non-standard line
+# endings, but will fail to receive email from client implementations
+# that do not terminate DATA content with the standard End-of-DATA
+# sequence &lt;CR&gt;&lt;LF&gt;.&lt;CR&gt;&lt;LF&gt;.
+#
+# Such clients can be allowlisted with smtpd_forbid_bare_newline_exclusions.
+# The example below allowlists SMTP clients in trusted networks.
+#
+smtpd_forbid_bare_newline = normalize
+smtpd_forbid_bare_newline_exclusions = $mynetworks
+</pre>
+</blockquote>
+
+<p> Alternative: </p>
+
+<blockquote>
+<pre>
+# Reject input lines that contain &lt;LF&gt; and log a "bare &lt;LF&gt; received"
+# error. Require that input lines end in &lt;CR&gt;&lt;LF&gt;, and require the
+# standard End-of-DATA sequence &lt;CR&gt;&lt;LF&gt;.&lt;CR&gt;&lt;LF&gt;.
+#
+# This will reject email from SMTP clients that send any non-standard
+# line endings such as web applications, netcat, or load balancer
+# health checks.
+#
+# This will also reject email from services that use BDAT to send
+# MIME text containing a bare newline (RFC 3030 Section 3 requires
+# canonical MIME format for text message types, defined in RFC 2045
+# Sections 2.7 and 2.8).
+#
+# Such clients can be allowlisted with smtpd_forbid_bare_newline_exclusions.
+# The example below allowlists SMTP clients in trusted networks.
+#
+smtpd_forbid_bare_newline = reject
+smtpd_forbid_bare_newline_exclusions = $mynetworks
+#
+# Alternatively, in the case of BDAT violations, BDAT can be selectively
+# disabled with smtpd_discard_ehlo_keyword_address_maps, or globally
+# disabled with smtpd_discard_ehlo_keywords.
+#
+# smtpd_discard_ehlo_keyword_address_maps = cidr:/path/to/file
+# /path/to/file:
+#     10.0.0.0/24 chunking, silent-discard
+# smtpd_discard_ehlo_keywords = chunking, silent-discard
+</pre>
+</blockquote>
+
+<p> This feature with settings <b>yes</b> and <b>no</b> is available
+in Postfix 3.8.4, 3.7.9, 3.6.13, and 3.5.23. Additionally, the
+settings <b>reject</b>, and <b>normalize</b> are available with
+Postfix &ge; 3.9, 3.8.5, 3.7.10, 3.6.14, and 3.5.24. </p>
+
+%PARAM smtpd_forbid_bare_newline_exclusions $mynetworks
+
+<p> Exclude the specified clients from smtpd_forbid_bare_newline
+enforcement. This setting uses the same syntax and parent-domain
+matching behavior as mynetworks. </p>
+
+<p> This feature is available in Postfix &ge; 3.9, 3.8.4, 3.7.9,
+3.6.13, and 3.5.23. </p>
+
+%PARAM smtpd_forbid_bare_newline_reject_code 550
+
+<p>
+The numerical Postfix SMTP server response code when rejecting a
+request with "smtpd_forbid_bare_newline = reject".
+Specify a 5XX status code (521 to disconnect).
+</p>
+
+<p> This feature is available in Postfix &ge; 3.9, 3.8.5, 3.7.10,
+3.6.14, and 3.5.24. </p>
+
+%PARAM cleanup_replace_stray_cr_lf yes
+
+<p> Replace each stray &lt;CR&gt; or &lt;LF&gt; character in message
+content with a space character, to prevent outbound SMTP smuggling,
+and to make the evaluation of Postfix-added DKIM or other signatures
+independent from how a remote mail server handles such characters.
+</p>
+
+<p> SMTP does not allow such characters unless they are part of a
+&lt;CR&gt;&lt;LF&gt; sequence, and different mail systems handle
+such stray characters in an implementation-dependent manner. Stray
+&lt;CR&gt; or &lt;LF&gt; characters could be used for outbound
+SMTP smuggling, where an attacker uses a Postfix server to send
+message content with a non-standard End-of-DATA sequence that
+triggers inbound SMTP smuggling at a remote SMTP server.</p>
+
+<p> The replacement happens before all other content management,
+and before Postfix may add a DKIM etc. signature; if the signature
+were created first, the replacement could invalidate the signature.
+</p>
+
+<p> In addition to preventing SMTP smuggling, replacing stray
+&lt;CR&gt; or &lt;LF&gt; characters ensures that the result of
+signature validation by later mail system will not depend on how
+that mail system handles those stray characters in an
+implementation-dependent manner. </p>
+
+<p> This feature is available in Postfix &ge; 3.9, 3.8.5, 3.7.10,
+3.6.14, and 3.5.24. </p>
 
 %PARAM smtpd_forbid_unauth_pipelining Postfix &ge; 3.9: yes
 
