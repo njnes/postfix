@@ -5,7 +5,7 @@
 /*	Postfix lookup table management
 /* SYNOPSIS
 /* .fi
-/*	\fBpostmap\fR [\fB-bfFhimnNoprsuUvw\fR] [\fB-c \fIconfig_dir\fR]
+/*	\fBpostmap\fR [\fB-bfFhijmnNoprsuUvw\fR] [\fB-c \fIconfig_dir\fR]
 /*	[\fB-d \fIkey\fR] [\fB-q \fIkey\fR]
 /*		[\fIfile_type\fR:]\fIfile_name\fR ...
 /* DESCRIPTION
@@ -126,7 +126,7 @@
 /*	generates header-style lookup keys for attachment MIME
 /*	headers and for attached message/* headers.
 /* .sp
-/*	NOTE: with "smtputf8_enable = yes", the \fB-b\fR option
+/*	NOTE: with "smtputf8_enable = yes", the \fB-h\fR option
 /*	option disables UTF-8 syntax checks on query keys and
 /*	lookup results. Specify the \fB-U\fR option to force UTF-8
 /*	syntax checks anyway.
@@ -136,6 +136,11 @@
 /*	Incremental mode. Read entries from standard input and do not
 /*	truncate an existing database. By default, \fBpostmap\fR(1) creates
 /*	a new database from the entries in \fBfile_name\fR.
+/* .IP \fB-j\fR
+/*	JSON output. Format the output from \fB-q\fR and \fB-s\fR
+/*	as one \fB{"\fIkey\fB": "\fIvalue\fB"}\fR object per line.
+/* .sp
+/*	This feature is available in Postfix version 3.11 and later.
 /* .IP \fB-m\fR
 /*	Enable MIME parsing with "\fB-b\fR" and "\fB-h\fR".
 /* .sp
@@ -386,6 +391,13 @@ typedef struct {
     int     found;			/* result */
 } POSTMAP_KEY_STATE;
 
+ /*
+  * Global state.
+  */
+int     json_output;
+VSTRING *json_key_buf;
+VSTRING *json_val_buf;
+
 /* postmap - create or update mapping database */
 
 static void postmap(char *map_type, char *path_name, int postmap_flags,
@@ -615,7 +627,13 @@ static void postmap_body(void *ptr, int unused_rec_type,
 		msg_warn("table %s:%s should return NO RESULT in case of NOT FOUND",
 			 dicts[n]->type, dicts[n]->name);
 	    }
-	    vstream_printf("%s	%s\n", keybuf, value);
+	    if (json_output == 0)
+		vstream_printf("%s	%s\n", keybuf, value);
+	    else
+		vstream_printf("{\"%s\": \"%s\"}\n",
+			       quote_for_json(json_key_buf, keybuf, -1),
+			       quote_for_json(json_val_buf, value, -1));
+
 	    state->found = 1;
 	    break;
 	}
@@ -698,7 +716,12 @@ static int postmap_queries(VSTREAM *in, char **maps, const int map_count,
 			msg_warn("table %s:%s should return NO RESULT in case of NOT FOUND",
 				 dicts[n]->type, dicts[n]->name);
 		    }
-		    vstream_printf("%s	%s\n", STR(keybuf), value);
+		    if (json_output == 0)
+			vstream_printf("%s	%s\n", STR(keybuf), value);
+		    else
+			vstream_printf("{\"%s\": \"%s\"}\n",
+			      quote_for_json(json_key_buf, STR(keybuf), -1),
+				   quote_for_json(json_val_buf, value, -1));
 		    found = 1;
 		    break;
 		}
@@ -794,7 +817,12 @@ static int postmap_query(const char *map_type, const char *map_name,
 	    msg_warn("table %s:%s should return NO RESULT in case of NOT FOUND",
 		     map_type, map_name);
 	}
-	vstream_printf("%s\n", value);
+	if (json_output == 0)
+	    vstream_printf("%s\n", value);
+	else
+	    vstream_printf("{\"%s\": \"%s\"}\n",
+			   quote_for_json(json_key_buf, key, -1),
+			   quote_for_json(json_val_buf, value, -1));
     }
     switch (dict->error) {
     case 0:
@@ -899,8 +927,6 @@ static void postmap_seq(const char *map_type, const char *map_name,
     const char *value;
     int     func;
 
-    if (strcmp(map_type, DICT_TYPE_PROXY) == 0)
-	msg_fatal("can't sequence maps via the proxy service");
     dict = dict_open3(map_type, map_name, O_RDONLY, dict_flags);
     for (func = DICT_SEQ_FUN_FIRST; /* void */ ; func = DICT_SEQ_FUN_NEXT) {
 	if (dict_seq(dict, func, &key, &value) != 0)
@@ -928,7 +954,12 @@ static void postmap_seq(const char *map_type, const char *map_name,
 	    }
 	    value = STR(unb64);
 	}
-	vstream_printf("%s	%s\n", key, value);
+	if (json_output == 0)
+	    vstream_printf("%s	%s\n", key, value);
+	else
+	    vstream_printf("{\"%s\": \"%s\"}\n",
+			   quote_for_json(json_key_buf, key, -1),
+			   quote_for_json(json_val_buf, value, -1));
     }
     if (dict->error)
 	msg_fatal("table %s:%s: sequence error: %m", dict->type, dict->name);
@@ -957,6 +988,7 @@ int     main(int argc, char **argv)
     int     open_flags = O_RDWR | O_CREAT | O_TRUNC;
     int     dict_flags = (DICT_FLAG_DUP_WARN | DICT_FLAG_FOLD_FIX
 			  | DICT_FLAG_UTF8_REQUEST);
+    int     update = 0;
     char   *query = 0;
     char   *delkey = 0;
     int     sequence = 0;
@@ -1008,7 +1040,7 @@ int     main(int argc, char **argv)
     /*
      * Parse JCL.
      */
-    while ((ch = GETOPT(argc, argv, "bc:d:fFhimnNopq:rsuUvw")) > 0) {
+    while ((ch = GETOPT(argc, argv, "bc:d:fFhijmnNopq:rsuUvw")) > 0) {
 	switch (ch) {
 	default:
 	    usage(argv[0]);
@@ -1025,8 +1057,8 @@ int     main(int argc, char **argv)
 		msg_fatal("out of memory");
 	    break;
 	case 'd':
-	    if (sequence || query || delkey)
-		msg_fatal("specify only one of -s -q or -d");
+	    if (update || sequence || query || delkey)
+		msg_fatal("specify only one of -d -i -q or -s");
 	    delkey = optarg;
 	    break;
 	case 'f':
@@ -1039,7 +1071,17 @@ int     main(int argc, char **argv)
 	    postmap_flags |= POSTMAP_FLAG_HEADER_KEY;
 	    break;
 	case 'i':
+	    if (update || sequence || query || delkey)
+		msg_fatal("specify only one of -d -i -q or -s");
+	    update = 1;
 	    open_flags &= ~O_TRUNC;
+	    break;
+	case 'j':
+	    if (json_output == 0) {
+		json_output = 1;
+		json_key_buf = vstring_alloc(100);
+		json_val_buf = vstring_alloc(100);
+	    }
 	    break;
 	case 'm':
 	    postmap_flags |= POSTMAP_FLAG_MIME_KEY;
@@ -1055,8 +1097,8 @@ int     main(int argc, char **argv)
 	    postmap_flags &= ~POSTMAP_FLAG_SAVE_PERM;
 	    break;
 	case 'q':
-	    if (sequence || query || delkey)
-		msg_fatal("specify only one of -s -q or -d");
+	    if (update || sequence || query || delkey)
+		msg_fatal("specify only one of -d -i -q or -s");
 	    query = optarg;
 	    break;
 	case 'r':
@@ -1064,8 +1106,8 @@ int     main(int argc, char **argv)
 	    dict_flags |= DICT_FLAG_DUP_REPLACE;
 	    break;
 	case 's':
-	    if (query || delkey)
-		msg_fatal("specify only one of -s or -q or -d");
+	    if (update || sequence || query || delkey)
+		msg_fatal("specify only one of -d -i -q or -s");
 	    sequence = 1;
 	    break;
 	case 'u':
@@ -1083,6 +1125,8 @@ int     main(int argc, char **argv)
 	    break;
 	}
     }
+    if (json_output && !(sequence || query))
+	msg_fatal("option -j requires -q or -s");
     mail_conf_read();
     /* Enforce consistent operation of different Postfix parts. */
     import_env = mail_parm_split(VAR_IMPORT_ENVIRON, var_import_environ);

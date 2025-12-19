@@ -54,6 +54,9 @@
 /*	Google, Inc.
 /*	111 8th Avenue
 /*	New York, NY 10011, USA
+/*
+/*	Wietse Venema
+/*	porcupine.org
 /*--*/
 
 /* System library. */
@@ -109,7 +112,7 @@ static int deliver_pass_send_request(VSTREAM *stream, DELIVER_REQUEST *request,
 	       SEND_ATTR_LONG(MAIL_ATTR_SIZE, request->data_size),
 	       SEND_ATTR_STR(MAIL_ATTR_NEXTHOP, nexthop),
 	       SEND_ATTR_STR(MAIL_ATTR_ENCODING, request->encoding),
-	       SEND_ATTR_INT(MAIL_ATTR_SMTPUTF8, request->smtputf8),
+	       SEND_ATTR_INT(MAIL_ATTR_SENDOPTS, request->sendopts),
 	       SEND_ATTR_STR(MAIL_ATTR_SENDER, request->sender),
 	       SEND_ATTR_STR(MAIL_ATTR_DSN_ENVID, request->dsn_envid),
 	       SEND_ATTR_INT(MAIL_ATTR_DSN_RET, request->dsn_ret),
@@ -207,13 +210,13 @@ int     deliver_pass(const char *class, const char *service,
 	(void) DSN_SIMPLE(&dsn, "4.3.0", "mail transport unavailable");
 	status = defer_append(DEL_REQ_TRACE_FLAGS(request->flags),
 			      request->queue_id, &request->msg_stats,
-			      rcpt, "none", &dsn);
+			      rcpt, "none", NO_TLS_STATS, &dsn);
     } else if ((status = deliver_pass_final_reply(stream, dsb))
 	       == DELIVER_PASS_UNKNOWN) {
 	(void) DSN_SIMPLE(&dsn, "4.3.0", "unknown mail transport error");
 	status = defer_append(DEL_REQ_TRACE_FLAGS(request->flags),
 			      request->queue_id, &request->msg_stats,
-			      rcpt, "none", &dsn);
+			      rcpt, "none", NO_TLS_STATS, &dsn);
     }
 
     /*

@@ -170,7 +170,8 @@
 /* .nf
 /*	    \fIRight\fR: command -f $sender -- $recipient
 /* .fi
-/* NOTE: DO NOT put quotes around the command, $sender, or $recipient.
+/* .IP
+/*	NOTE: DO NOT put quotes around the command, $sender, or $recipient.
 /* .IP
 /*	This feature is available as of Postfix 2.3.
 /* .IP "\fBsize\fR=\fIsize_limit\fR (optional)"
@@ -191,8 +192,10 @@
 /*	shell meta characters by a shell command interpreter.
 /* .sp
 /*	Specify "{" and "}" around command arguments that contain
-/*	whitespace (Postfix 3.0 and later). Whitespace
-/*	after the opening "{" and before the closing "}" is ignored.
+/*	whitespace, arguments that begin with "{", or arguments
+/*	that must be an empty string (Postfix 3.0 and later). The
+/*	outer "{" and "}" will be removed, together with any leading
+/*	or trailing whitespace in the remaining text.
 /* .sp
 /*	In the command argument vector, the following macros are recognized
 /*	and replaced with corresponding information from the Postfix queue
@@ -388,7 +391,7 @@
 /*	request before it is terminated by a built-in watchdog timer.
 /* .IP "\fBdelay_logging_resolution_limit (2)\fR"
 /*	The maximal number of digits after the decimal point when logging
-/*	sub-second delay values.
+/*	delay values.
 /* .IP "\fBexport_environment (see 'postconf -d' output)\fR"
 /*	The list of environment variables that a Postfix process will export
 /*	to non-Postfix processes.
@@ -549,7 +552,7 @@
 #define PIPE_DICT_SASL_USERNAME	"sasl_username"	/* key */
 #define PIPE_DICT_SASL_SENDER	"sasl_sender"	/* key */
 #define PIPE_DICT_QUEUE_ID	"queue_id"	/* key */
-#define PIPE_DICT_ENVID		"envid"		/* key */
+#define PIPE_DICT_ENVID		"envid"	/* key */
 
  /*
   * Flags used to pass back the type of special parameter found by
@@ -1076,7 +1079,7 @@ static int eval_command_status(int command_status, char *service,
 	    rcpt = request->rcpt_list.info + n;
 	    status = sent(DEL_REQ_TRACE_FLAGS(request->flags),
 			  request->queue_id, &request->msg_stats, rcpt,
-			  service, &why->dsn);
+			  service, NO_TLS_STATS, &why->dsn);
 	    if (status == 0 && (request->flags & DEL_REQ_FLAG_SUCCESS))
 		deliver_completed(request->fp, rcpt->offset);
 	    result |= status;
@@ -1093,7 +1096,7 @@ static int eval_command_status(int command_status, char *service,
 		(DEL_REQ_TRACE_FLAGS(request->flags),
 		 request->queue_id,
 		 &request->msg_stats, rcpt,
-		 service, &why->dsn);
+		 service, NO_TLS_STATS, &why->dsn);
 	    if (status == 0)
 		deliver_completed(request->fp, rcpt->offset);
 	    result |= status;
@@ -1205,7 +1208,7 @@ static int deliver_message(DELIVER_REQUEST *request, char *service, char **argv)
 	    rcpt = request->rcpt_list.info + n;
 	    status = sent(DEL_REQ_TRACE_FLAGS(request->flags),
 			  request->queue_id, &request->msg_stats,
-			  rcpt, service, &why->dsn);
+			  rcpt, service, NO_TLS_STATS, &why->dsn);
 	    if (status == 0 && (request->flags & DEL_REQ_FLAG_SUCCESS))
 		deliver_completed(request->fp, rcpt->offset);
 	    deliver_status |= status;

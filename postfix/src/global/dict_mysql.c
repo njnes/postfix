@@ -121,6 +121,15 @@
 #define DICT_MYSQL_SSL_VERIFY_SERVER_CERT MYSQL_OPT_SSL_MODE
 #endif
 
+ /*
+  * MariaDB Connector/C 3.0.0 lists mysql_options() as deprecated and
+  * recommends using mysql_optionsv() instead. Option names and semantics
+  * have not changed.
+  */
+#if defined(MARIADB_PACKAGE_VERSION_ID) && MARIADB_PACKAGE_VERSION_ID >= 30000
+#define mysql_options	mysql_optionsv
+#endif
+
 /* need some structs to help organize things */
 typedef struct {
     MYSQL  *db;
@@ -598,12 +607,27 @@ static void plmysql_connect_single(DICT_MYSQL *dict_mysql, HOST *host)
 	mysql_options(host->db, MYSQL_READ_DEFAULT_FILE, dict_mysql->option_file);
     if (dict_mysql->option_group && dict_mysql->option_group[0])
 	mysql_options(host->db, MYSQL_READ_DEFAULT_GROUP, dict_mysql->option_group);
+#if MYSQL_VERSION_ID >= 80035
+    /* Preferred API. */
+    if (dict_mysql->tls_key_file)
+	mysql_options(host->db, MYSQL_OPT_SSL_KEY, dict_mysql->tls_key_file);
+    if (dict_mysql->tls_cert_file)
+	mysql_options(host->db, MYSQL_OPT_SSL_CERT, dict_mysql->tls_cert_file);
+    if (dict_mysql->tls_CAfile)
+	mysql_options(host->db, MYSQL_OPT_SSL_CA, dict_mysql->tls_CAfile);
+    if (dict_mysql->tls_CApath)
+	mysql_options(host->db, MYSQL_OPT_SSL_CAPATH, dict_mysql->tls_CApath);
+    if (dict_mysql->tls_ciphers)
+	mysql_options(host->db, MYSQL_OPT_SSL_CIPHER, dict_mysql->tls_ciphers);
+#else
+    /* Deprecated API. */
     if (dict_mysql->tls_key_file || dict_mysql->tls_cert_file ||
 	dict_mysql->tls_CAfile || dict_mysql->tls_CApath || dict_mysql->tls_ciphers)
 	mysql_ssl_set(host->db,
 		      dict_mysql->tls_key_file, dict_mysql->tls_cert_file,
 		      dict_mysql->tls_CAfile, dict_mysql->tls_CApath,
 		      dict_mysql->tls_ciphers);
+#endif
 #if defined(DICT_MYSQL_SSL_VERIFY_SERVER_CERT)
     if (dict_mysql->tls_verify_cert != -1)
 	mysql_options(host->db, DICT_MYSQL_SSL_VERIFY_SERVER_CERT,
@@ -733,6 +757,9 @@ static void mysql_parse_config(DICT_MYSQL *dict_mysql, const char *mysqlcf)
 	    msg_info("%s: %s: no hostnames specified, defaulting to '%s'",
 		     myname, mysqlcf, dict_mysql->hosts->argv[0]);
     }
+    /* Don't blacklist the load balancer! */
+    if (dict_mysql->hosts->argc == 1)
+	argv_add(dict_mysql->hosts, dict_mysql->hosts->argv[0], (char *) 0);
     myfree(hosts);
 }
 
@@ -770,7 +797,7 @@ DICT   *dict_mysql_open(const char *name, int open_flags, int dict_flags)
     if (dict_mysql->pldb == NULL)
 	msg_fatal("couldn't initialize pldb!\n");
     dict_mysql->dict.owner = cfg_get_owner(dict_mysql->parser);
-    return (DICT_DEBUG (&dict_mysql->dict));
+    return (&dict_mysql->dict);
 }
 
 /*

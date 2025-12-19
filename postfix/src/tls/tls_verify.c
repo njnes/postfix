@@ -11,8 +11,9 @@
 /*	int	ok;
 /*	X509_STORE_CTX *ctx;
 /*
-/*	int     tls_log_verify_error(TLScontext)
+/*	int     tls_log_verify_error(TLScontext, tlsrpt)
 /*	TLS_SESS_STATE *TLScontext;
+/*	struct TLSRPT_WRAPPER *tlsrpt;
 /*
 /*	char *tls_peer_CN(peercert, TLScontext)
 /*	X509   *peercert;
@@ -89,6 +90,9 @@
 /*
 /*	Victor Duchovni
 /*	Morgan Stanley
+/*
+/*	Wietse Venema
+/*	porcupine.org
 /*--*/
 
 /* System library. */
@@ -107,17 +111,35 @@
 
 /* TLS library. */
 
+#ifdef USE_TLSRPT
+#include <tlsrpt_wrapper.h>
+#endif
+
 #define TLS_INTERNAL
 #include <tls.h>
 
 /* update_error_state - safely stash away error state */
 
-static void update_error_state(TLS_SESS_STATE *TLScontext, int depth,
-			               X509 *errorcert, int errorcode)
+static void update_error_state(X509_STORE_CTX *ctx, TLS_SESS_STATE *TLScontext,
+			          int depth, X509 *errorcert, int errorcode)
 {
-    /* No news is good news */
-    if (TLScontext->errordepth >= 0 && TLScontext->errordepth <= depth)
-	return;
+
+    /*
+     * Report the error that is closest to the leaf certificate, any errors
+     * higher up the chain are immaterial until the "inner" errors are fixed.
+     * 
+     * We special-case "X509_V_ERR_HOSTNAME_MISMATCH" (at depth 0) in order to
+     * distinguish between untrusted certificates and trusted certificates
+     * with a hostname mismatch.  Any other error has a higher priority.
+     */
+    if (TLScontext->errordepth >= 0) {
+	if ((TLScontext->errordepth <= depth &&
+	     TLScontext->errorcode != X509_V_ERR_HOSTNAME_MISMATCH) ||
+	    errorcode == X509_V_ERR_HOSTNAME_MISMATCH) {
+	    X509_STORE_CTX_set_error(ctx, TLScontext->errorcode);
+	    return;
+	}
+    }
 
     /*
      * The certificate pointer is stable during the verification callback,
@@ -171,12 +193,12 @@ int     tls_verify_certificate_callback(int ok, X509_STORE_CTX *ctx)
     if (TLScontext->must_fail) {
 	if (depth == 0) {
 	    X509_STORE_CTX_set_error(ctx, err = X509_V_ERR_UNSPECIFIED);
-	    update_error_state(TLScontext, depth, cert, err);
+	    update_error_state(ctx, TLScontext, depth, cert, err);
 	}
 	return (1);
     }
     if (ok == 0)
-	update_error_state(TLScontext, depth, cert, err);
+	update_error_state(ctx, TLScontext, depth, cert, err);
 
     if (TLScontext->log_mask & TLS_LOG_VERBOSE) {
 	if (cert) {
@@ -194,17 +216,49 @@ int     tls_verify_certificate_callback(int ok, X509_STORE_CTX *ctx)
 
 /* tls_log_verify_error - Report final verification error status */
 
-void    tls_log_verify_error(TLS_SESS_STATE *TLScontext)
+void    tls_log_verify_error(TLS_SESS_STATE *TLScontext,
+			             struct TLSRPT_WRAPPER *tlsrpt)
 {
     char    buf[CCERT_BUFSIZ];
     int     err = TLScontext->errorcode;
     X509   *cert = TLScontext->errorcert;
     int     depth = TLScontext->errordepth;
 
+#ifdef USE_TLSRPT
+    VSTRING *err_vstr = vstring_alloc(100);
+
+#define CERT_ERROR_TO_STRING(err) \
+    translit(vstring_str(vstring_strcpy(err_vstr, \
+					X509_verify_cert_error_string(err))), \
+	     " ", "_")
+#endif
+
 #define PURPOSE ((depth>0) ? "CA": TLScontext->am_server ? "client": "server")
 
     if (err == X509_V_OK)
 	return;
+
+    /*
+     * If an external policy flagged an error, report that instead.
+     */
+    if (TLScontext->ffail_type) {
+	msg_info("certificate verification failed for %s: "
+		 "external policy failure (%s)",
+		 TLScontext->namaddr, TLScontext->ffail_type);
+#ifdef USE_TLSRPT
+	if (tlsrpt) {
+	    tlsrpt_failure_t failure_type;
+
+	    if ((failure_type = convert_tlsrpt_policy_failure(TLScontext->ffail_type)) < 0)
+		msg_panic("tls_log_verify_error: unexpected failure_reason: %s",
+			  TLScontext->ffail_type);
+	    trw_report_failure(tlsrpt, failure_type,
+			        /* additional_info= */ (char *) 0,
+			        /* failure_reason= */ (char *) 0);
+	}
+#endif
+	return;
+    }
 
     /*
      * Specific causes for verification failure.
@@ -218,10 +272,22 @@ void    tls_log_verify_error(TLS_SESS_STATE *TLScontext)
 	 */
 	msg_info("certificate verification failed for %s: "
 		 "not trusted by local or TLSA policy", TLScontext->namaddr);
+#ifdef USE_TLSRPT
+	if (tlsrpt)
+	    trw_report_failure(tlsrpt, TLSRPT_CERTIFICATE_NOT_TRUSTED,
+			        /* additional_info= */ (char *) 0,
+			        /* failure_code= */ (char *) 0);
+#endif
 	break;
     case X509_V_ERR_DEPTH_ZERO_SELF_SIGNED_CERT:
 	msg_info("certificate verification failed for %s: "
 		 "self-signed certificate", TLScontext->namaddr);
+#ifdef USE_TLSRPT
+	if (tlsrpt)
+	    trw_report_failure(tlsrpt, TLSRPT_VALIDATION_FAILURE,
+			        /* additional_info= */ (char *) 0,
+			       CERT_ERROR_TO_STRING(err));
+#endif
 	break;
     case X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY:
     case X509_V_ERR_SELF_SIGNED_CERT_IN_CHAIN:
@@ -237,25 +303,55 @@ void    tls_log_verify_error(TLS_SESS_STATE *TLScontext)
 	    strcpy(buf, "<unknown>");
 	msg_info("certificate verification failed for %s: untrusted issuer %s",
 		 TLScontext->namaddr, printable(buf, '?'));
+#ifdef USE_TLSRPT
+	if (tlsrpt)
+	    trw_report_failure(tlsrpt, TLSRPT_VALIDATION_FAILURE,
+			        /* additional_info= */ (char *) 0,
+			       CERT_ERROR_TO_STRING(err));
+#endif
 	break;
     case X509_V_ERR_CERT_NOT_YET_VALID:
     case X509_V_ERR_ERROR_IN_CERT_NOT_BEFORE_FIELD:
 	msg_info("%s certificate verification failed for %s: certificate not"
 		 " yet valid", PURPOSE, TLScontext->namaddr);
+#ifdef USE_TLSRPT
+	if (tlsrpt)
+	    trw_report_failure(tlsrpt, TLSRPT_VALIDATION_FAILURE,
+			        /* additional_info= */ (char *) 0,
+			       CERT_ERROR_TO_STRING(err));
+#endif
 	break;
     case X509_V_ERR_CERT_HAS_EXPIRED:
     case X509_V_ERR_ERROR_IN_CERT_NOT_AFTER_FIELD:
 	msg_info("%s certificate verification failed for %s: certificate has"
 		 " expired", PURPOSE, TLScontext->namaddr);
+#ifdef USE_TLSRPT
+	if (tlsrpt)
+	    trw_report_failure(tlsrpt, TLSRPT_CERTIFICATE_EXPIRED,
+			        /* additional_info= */ (char *) 0,
+			        /* failure_code= */ (char *) 0);
+#endif
 	break;
     case X509_V_ERR_INVALID_PURPOSE:
 	msg_info("certificate verification failed for %s: not designated for "
 		 "use as a %s certificate", TLScontext->namaddr, PURPOSE);
+#ifdef USE_TLSRPT
+	if (tlsrpt)
+	    trw_report_failure(tlsrpt, TLSRPT_VALIDATION_FAILURE,
+			        /* additional_info= */ (char *) 0,
+			       CERT_ERROR_TO_STRING(err));
+#endif
 	break;
     case X509_V_ERR_CERT_CHAIN_TOO_LONG:
 	msg_info("certificate verification failed for %s: "
 		 "certificate chain longer than limit(%d)",
 		 TLScontext->namaddr, depth - 1);
+#ifdef USE_TLSRPT
+	if (tlsrpt)
+	    trw_report_failure(tlsrpt, TLSRPT_VALIDATION_FAILURE,
+			        /* additional_info= */ (char *) 0,
+			       CERT_ERROR_TO_STRING(err));
+#endif
 	break;
     default:
 	msg_info("%s certificate verification failed for %s: num=%d:%s",
@@ -263,6 +359,9 @@ void    tls_log_verify_error(TLS_SESS_STATE *TLScontext)
 		 X509_verify_cert_error_string(err));
 	break;
     }
+#ifdef USE_TLSRPT
+    vstring_free(err_vstr);
+#endif
 }
 
 #ifndef DONT_GRIPE

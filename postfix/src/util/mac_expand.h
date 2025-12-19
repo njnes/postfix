@@ -45,7 +45,7 @@ typedef enum MAC_EXP_OP_RES {
     MAC_EXP_OP_RES_TRUE,
     MAC_EXP_OP_RES_FALSE,
     MAC_EXP_OP_RES_ERROR,
-} MAC_EXP_OP_RES;
+}       MAC_EXP_OP_RES;
 
 
 extern MAC_EXP_OP_RES mac_exp_op_res_bool[2];
@@ -57,10 +57,12 @@ extern MAC_EXP_OP_RES mac_exp_op_res_bool[2];
 #define MAC_EXP_MODE_USE	(1)
 
 typedef const char *(*MAC_EXP_LOOKUP_FN) (const char *, int, void *);
-typedef MAC_EXP_OP_RES (*MAC_EXPAND_RELOP_FN) (const char *, int, const char *);
+typedef MAC_EXP_OP_RES(*MAC_EXPAND_RELOP_FN) (const char *, int, const char *);
+typedef int (*MAC_EXPAND_NAMED_FN) (VSTRING *, const char *);
 
 extern int mac_expand(VSTRING *, const char *, int, const char *, MAC_EXP_LOOKUP_FN, void *);
-void    mac_expand_add_relop(int *, const char *, MAC_EXPAND_RELOP_FN);
+extern void mac_expand_add_relop(int *, const char *, MAC_EXPAND_RELOP_FN);
+extern void mac_expand_add_named_fn(const char *, MAC_EXPAND_NAMED_FN);
 
 /* LICENSE
 /* .ad
@@ -76,6 +78,9 @@ void    mac_expand_add_relop(int *, const char *, MAC_EXPAND_RELOP_FN);
 /*	Google, Inc.
 /*	111 8th Avenue
 /*	New York, NY 10011, USA
+/*
+/*	Wietse Venema
+/*	porcupine.org
 /*--*/
 
 #endif

@@ -174,7 +174,8 @@
 /*	These synonymous values combine ssl-expert with ssl-session-packet-dump.
 /*	For experts only, and in most cases, use wireshark instead.
 /* .IP "\fBssl-debug\fR"
-/*	Turn on OpenSSL logging of the progress of the SSL handshake.
+/*	Turn on OpenSSL logging of the progress of the SSL handshake.  This
+/*	includes detailed output of decoded handshake messages.
 /* .IP "\fBssl-handshake-packet-dump\fR"
 /*	Log hexadecimal packet dumps of the SSL handshake; for experts only.
 /* .IP "\fBssl-session-packet-dump\fR"
@@ -414,7 +415,6 @@
 
 #ifdef USE_TLS
 #include <tls_proxy.h>
-#include <openssl/engine.h>
 #endif
 
  /*
@@ -785,7 +785,7 @@ static int starttls(STATE *state)
 
     cipher_exclusions = vstring_alloc(10);
     ADD_EXCLUDE(cipher_exclusions, DEF_SMTP_TLS_EXCL_CIPH);
-    if (TLS_REQUIRED(state->level))
+    if (TLS_REQUIRED_BY_SECURITY_LEVEL(state->level))
 	ADD_EXCLUDE(cipher_exclusions, DEF_SMTP_TLS_MAND_EXCL);
 
     /*
@@ -835,6 +835,8 @@ static int starttls(STATE *state)
 				     = vstring_str(cipher_exclusions),
 				     matchargv = state->match,
 				     mdalg = state->mdalg,
+				     tlsrpt = 0,
+				     ffail_type = 0,
 				     dane = state->ddane ?
 				     state->ddane : state->dane);
 
@@ -899,7 +901,7 @@ static int starttls(STATE *state)
 	    state->tls_context = tls_proxy_context_receive(state->stream);
 	    if (state->tls_context) {
 		if (state->log_mask &
-		    (TLS_LOG_CERTMATCH | TLS_LOG_VERBOSE | TLS_LOG_PEERCERT)) {
+		 (TLS_LOG_CERTMATCH | TLS_LOG_VERBOSE | TLS_LOG_PEERCERT)) {
 		    if (state->tls_context->stoc_rpk)
 			msg_info("%s: pkey_fingerprint=%s", state->namaddrport,
 				 state->tls_context->peer_pkey_fprint);
@@ -939,6 +941,8 @@ static int starttls(STATE *state)
 			     = vstring_str(cipher_exclusions),
 			     matchargv = state->match,
 			     mdalg = state->mdalg,
+			     tlsrpt = 0,
+			     ffail_type = 0,
 			  dane = state->ddane ? state->ddane : state->dane);
     }						/* tlsproxy_mode */
     vstring_free(cipher_exclusions);
@@ -1648,7 +1652,7 @@ static void connect_remote(STATE *state, char *dest)
 	if (level == TLS_LEV_INVALID
 	    || (state->stream = connect_addr(state, addr)) == 0) {
 	    msg_info("Failed to establish session to %s via %s:%u: %s",
-		     dest, HNAME(addr), addr->port,
+		     dest, HNAME(addr), ntohs(state->port),
 		     vstring_str(state->why->reason));
 	    continue;
 	}
@@ -1865,6 +1869,22 @@ static void usage(void)
     exit(1);
 }
 
+#ifdef USE_TLS
+#ifndef OPENSSL_NO_SSL_TRACE
+static void ssl_trace(int write_p, int version, int content_type,
+		        const void *buf, size_t msglen, SSL *ssl, void *arg)
+{
+    BIO    *out = (BIO *) arg;
+
+    /* Avoid mixing BIO and vstream/stdio buffers */
+    vstream_fflush(VSTREAM_OUT);
+    SSL_trace(write_p, version, content_type, buf, msglen, ssl, out);
+    (void) BIO_flush(out);
+}
+
+#endif
+#endif
+
 /* tls_init - initialize application TLS library context */
 
 static void tls_init(STATE *state)
@@ -1892,6 +1912,13 @@ static void tls_init(STATE *state)
 			CAfile = state->CAfile,
 			CApath = state->CApath,
 			mdalg = state->mdalg);
+#ifndef OPENSSL_NO_SSL_TRACE
+    if (state->tls_ctx != 0
+	&& (state->log_mask & TLS_LOG_DEBUG)) {
+	SSL_CTX_set_msg_callback(state->tls_ctx->ssl_ctx, ssl_trace);
+	SSL_CTX_set_msg_callback_arg(state->tls_ctx->ssl_ctx, state->tls_bio);
+    }
+#endif
 #endif
 }
 
@@ -2143,8 +2170,8 @@ static void parse_match(STATE *state, int argc, char *argv[])
     int     smtp_mode = 1;
 
     /*
-     * DANE match names are configured late, once the TLSA records are in hand.
-     * For now, prepare to fall back to "secure".
+     * DANE match names are configured late, once the TLSA records are in
+     * hand. For now, prepare to fall back to "secure".
      */
     switch (state->level) {
     default:
@@ -2245,6 +2272,7 @@ int     main(int argc, char *argv[])
 	warn_compat_break_smtp_tls_fpt_dgst = 0;
     else
 	state.mdalg = mystrdup(var_smtp_tls_fpt_dgst);
+    state.tls_bio = BIO_new_fp(stdout, BIO_NOCLOSE);
 
     /*
      * We first call tls_init(), which ultimately calls SSL_library_init(),
@@ -2256,9 +2284,6 @@ int     main(int argc, char *argv[])
 	msg_warn("DANE TLS support is not available, resorting to \"secure\"");
 	state.level = TLS_LEV_SECURE;
     }
-    state.tls_bio = 0;
-    if (state.print_trust)
-	state.tls_bio = BIO_new_fp(stdout, BIO_NOCLOSE);
 #endif
 
     /* Enforce consistent operation of different Postfix parts. */

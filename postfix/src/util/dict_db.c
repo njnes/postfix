@@ -650,9 +650,9 @@ static DICT *dict_db_open(const char *class, const char *path, int open_flags,
 		       DB_VERSION_MAJOR, DB_VERSION_MINOR, DB_VERSION_PATCH,
 			       major_version, minor_version, patch_version));
     if (msg_verbose) {
-	msg_info("Compiled against Berkeley DB: %d.%d.%d\n",
+	msg_info("Compiled against Berkeley DB: %d.%d.%d",
 		 DB_VERSION_MAJOR, DB_VERSION_MINOR, DB_VERSION_PATCH);
-	msg_info("Run-time linked against Berkeley DB: %d.%d.%d\n",
+	msg_info("Run-time linked against Berkeley DB: %d.%d.%d",
 		 major_version, minor_version, patch_version);
     }
 #else
@@ -789,7 +789,8 @@ static DICT *dict_db_open(const char *class, const char *path, int open_flags,
     dict_db->dict.stat_fd = dbfd;
     if (fstat(dict_db->dict.stat_fd, &st) < 0)
 	msg_fatal("dict_db_open: fstat: %m");
-    dict_db->dict.mtime = st.st_mtime;
+    if (open_flags == O_RDONLY)
+	dict_db->dict.mtime = st.st_mtime;
     dict_db->dict.owner.uid = st.st_uid;
     dict_db->dict.owner.status = (st.st_uid != 0);
 
@@ -798,6 +799,7 @@ static DICT *dict_db_open(const char *class, const char *path, int open_flags,
      * the source file changed only seconds ago.
      */
     if ((dict_flags & DICT_FLAG_LOCK) != 0
+	&& open_flags == O_RDONLY
 	&& stat(path, &st) == 0
 	&& st.st_mtime > dict_db->dict.mtime
 	&& st.st_mtime < time((time_t *) 0) - 100)
@@ -821,7 +823,7 @@ static DICT *dict_db_open(const char *class, const char *path, int open_flags,
     dict_db->val_buf = 0;
 
     myfree(db_path);
-    return (DICT_DEBUG (&dict_db->dict));
+    return (&dict_db->dict);
 }
 
 /* dict_hash_open - create association with data base */

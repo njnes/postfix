@@ -125,9 +125,11 @@
 /*	bool	var_long_queue_ids;
 /*	bool	var_daemon_open_fatal;
 /*	char	*var_dsn_filter;
-/*	int	var_smtputf8_enable
+/*	int	var_smtputf8_enable;
 /*	int	var_strict_smtputf8;
 /*	char	*var_smtputf8_autoclass;
+/*	int	var_reqtls_enable;
+/*	int	var_tls_required_enable;
 /*	int     var_idna2003_compat;
 /*	char	*var_compatibility_level;
 /*	char	*var_drop_hdrs;
@@ -197,6 +199,9 @@
 /*	Google, Inc.
 /*	111 8th Avenue
 /*	New York, NY 10011, USA
+/*
+/*	Wietse Venema
+/*	porcupine.org
 /*--*/
 
 /* System library. */
@@ -223,11 +228,13 @@
 #include <dict.h>
 #include <dict_db.h>
 #include <dict_lmdb.h>
+#include <dict_sockmap.h>
 #include <inet_proto.h>
 #include <vstring_vstream.h>
 #include <iostuff.h>
 #include <midna_domain.h>
 #include <logwriter.h>
+#include <mac_midna.h>
 
 /* Global library. */
 
@@ -252,7 +259,7 @@ char   *var_relayhost;
 char   *var_transit_origin;
 char   *var_transit_dest;
 char   *var_mail_name;
-int     var_helpful_warnings;
+bool    var_helpful_warnings;
 char   *var_syslog_name;
 char   *var_mail_owner;
 uid_t   var_owner_uid;
@@ -301,10 +308,10 @@ int     var_fork_delay;
 int     var_flock_tries;
 int     var_flock_delay;
 int     var_flock_stale;
-int     var_disable_dns;
-int     var_soft_bounce;
+bool    var_disable_dns;
+bool    var_soft_bounce;
 time_t  var_starttime;
-int     var_ownreq_special;
+bool    var_ownreq_special;
 int     var_daemon_timeout;
 char   *var_syslog_facility;
 char   *var_relay_domains;
@@ -343,17 +350,18 @@ int     var_mime_maxdepth;
 int     var_mime_bound_len;
 int     var_header_limit;
 int     var_token_limit;
-int     var_disable_mime_input;
-int     var_disable_mime_oconv;
-int     var_strict_8bitmime;
-int     var_strict_7bit_hdrs;
-int     var_strict_8bit_body;
-int     var_strict_encoding;
-int     var_verify_neg_cache;
-int     var_oldlog_compat;
+bool    var_disable_mime_input;
+bool    var_disable_mime_oconv;
+bool    var_strict_8bitmime;
+bool    var_strict_7bit_hdrs;
+bool    var_strict_8bit_body;
+bool    var_strict_encoding;
+bool    var_verify_neg_cache;
+bool    var_oldlog_compat;
 int     var_delay_max_res;
+int     var_sockmap_max_reply;
 char   *var_int_filt_classes;
-int     var_cyrus_sasl_authzid;
+bool    var_cyrus_sasl_authzid;
 
 char   *var_multi_conf_dirs;
 char   *var_multi_wrapper;
@@ -364,10 +372,12 @@ bool    var_long_queue_ids;
 bool    var_daemon_open_fatal;
 bool    var_dns_ncache_ttl_fix;
 char   *var_dsn_filter;
-int     var_smtputf8_enable;
-int     var_strict_smtputf8;
+bool    var_smtputf8_enable;
+bool    var_strict_smtputf8;
 char   *var_smtputf8_autoclass;
-int     var_idna2003_compat;
+bool    var_reqtls_enable;
+bool    var_tls_required_enable;
+bool    var_idna2003_compat;
 char   *var_compatibility_level;
 char   *var_drop_hdrs;
 char   *var_info_log_addr_form;
@@ -385,6 +395,14 @@ bool    var_respectful_logging;
 char   *var_known_tcp_ports;
 
 const char null_format_string[1] = "";
+
+ /*
+  * Compatibility level 3.11.
+  */
+int     warn_compat_break_smtp_tlsrpt_skip_reused_hs;
+int     warn_compat_break_smtp_tls_level;
+int     warn_compat_break_lmtp_tls_level;
+int     warn_compat_break_tlsp_clnt_level;
 
  /*
   * Compatibility level 3.6.
@@ -468,6 +486,7 @@ static const char *check_mydomainname(void)
 	/* DO NOT CALL GETHOSTBYNAME OR GETNAMEINFO HERE - EDIT MAIN.CF */
 	return (DEF_MYDOMAIN);
     /* DO NOT CALL GETHOSTBYNAME OR GETNAMEINFO HERE - EDIT MAIN.CF */
+    /* TODO(wietse) handle Unicode variants for 'dot'. */
     return (dot + 1);
 }
 
@@ -521,7 +540,7 @@ static void check_mail_owner(void)
 	msg_fatal("file %s/%s: parameter %s: user %s has the same"
 		  " user ID %ld as user %s",
 		  var_config_dir, MAIN_CONF_FILE,
-		  VAR_MAIL_OWNER, var_mail_owner, 
+		  VAR_MAIL_OWNER, var_mail_owner,
 		  (long) var_owner_uid, pwd->pw_name);
 }
 
@@ -550,7 +569,7 @@ static void check_sgid_group(void)
 	msg_fatal("file %s/%s: parameter %s: group %s has the same"
 		  " group ID %ld as group %s",
 		  var_config_dir, MAIN_CONF_FILE,
-		  VAR_SGID_GROUP, var_sgid_group, 
+		  VAR_SGID_GROUP, var_sgid_group,
 		  (long) var_sgid_gid, grp->gr_name);
 }
 
@@ -656,7 +675,35 @@ static void check_legacy_defaults(void)
      * Each incompatible change has its own flag variable, instead of bit in a
      * shared variable. We don't want to rip up code when we need more flag
      * bits.
+     * 
+     * Note: the purpose of these mail_conf_lookup() calls is to detect if a
+     * parameter value is not specified. The calls must happen before
+     * parameter default settings are enforced with mail_conf_update().
+     * 
+     * The preferred flow is: 1) in mail_params.h, specify a configuration
+     * parameter default value that depends on the compatibility level; 2)
+     * below, set a flag to indicate that the parameter will be set to the
+     * legacy default value; 3) in the program-specific code, log a message
+     * when the legacy default value is actually used, and optionally clear
+     * the flag to avoid spamming the log.
      */
+
+    /*
+     * Look for specific parameters whose default changed when the
+     * compatibility level changed to 3.11.
+     */
+    if (compat_level < compat_level_from_string(COMPAT_LEVEL_3_11, msg_panic)) {
+#ifdef USE_TLS
+	if (mail_conf_lookup(VAR_SMTP_TLSRPT_SKIP_REUSED_HS) == 0)
+	    warn_compat_break_smtp_tlsrpt_skip_reused_hs = 1;
+	if (mail_conf_lookup(VAR_SMTP_TLS_LEVEL) == 0)
+	    warn_compat_break_smtp_tls_level = 1;
+	if (mail_conf_lookup(VAR_LMTP_TLS_LEVEL) == 0)
+	    warn_compat_break_lmtp_tls_level = 1;
+	if (mail_conf_lookup(VAR_TLSP_CLNT_LEVEL) == 0)
+	    warn_compat_break_tlsp_clnt_level = 1;
+#endif
+    }
 
     /*
      * Look for specific parameters whose default changed when the
@@ -753,6 +800,8 @@ void    mail_params_init()
 	VAR_SMTPUTF8_ENABLE, DEF_SMTPUTF8_ENABLE, &var_smtputf8_enable,
 	VAR_IDNA2003_COMPAT, DEF_IDNA2003_COMPAT, &var_idna2003_compat,
 	VAR_RESPECTFUL_LOGGING, DEF_RESPECTFUL_LOGGING, &var_respectful_logging,
+	VAR_REQTLS_ENABLE, DEF_REQTLS_ENABLE, &var_reqtls_enable,
+	VAR_TLSREQUIRED_ENABLE, DEF_TLSREQUIRED_ENABLE, &var_tls_required_enable,
 	0,
     };
     static const CONFIG_STR_FN_TABLE function_str_defaults[] = {
@@ -838,6 +887,7 @@ void    mail_params_init()
 	VAR_MIME_BOUND_LEN, DEF_MIME_BOUND_LEN, &var_mime_bound_len, 1, 0,
 	VAR_DELAY_MAX_RES, DEF_DELAY_MAX_RES, &var_delay_max_res, MIN_DELAY_MAX_RES, MAX_DELAY_MAX_RES,
 	VAR_INET_WINDOW, DEF_INET_WINDOW, &var_inet_windowsize, 0, 0,
+	VAR_SOCKMAP_MAX_REPLY, DEF_SOCKMAP_MAX_REPLY, &var_sockmap_max_reply, 1, 0,
 	0,
     };
     static const CONFIG_LONG_TABLE long_defaults[] = {
@@ -880,6 +930,11 @@ void    mail_params_init()
 	0,
     };
     const char *cp;
+
+    /*
+     * Register named functions.
+     */
+    mac_midna_register();
 
     /*
      * Extract compatibility level first, so that we can determine what
@@ -986,6 +1041,7 @@ void    mail_params_init()
     check_overlap();
     dict_db_cache_size = var_db_read_buf;
     dict_lmdb_map_size = var_lmdb_map_size;
+    dict_sockmap_max_reply = var_sockmap_max_reply;
     inet_windowsize = var_inet_windowsize;
     if (set_logwriter_create_perms(var_maillog_file_perms) < 0)
 	msg_warn("ignoring bad permissions: %s = %s",

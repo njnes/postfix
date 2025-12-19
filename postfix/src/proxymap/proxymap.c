@@ -40,21 +40,24 @@
 /*	file-based tables that are not based on \fBlmdb\fR).
 /* .PP
 /*	The \fBproxymap\fR(8) server implements the following requests:
-/* .IP "\fBopen\fR \fImaptype:mapname flags\fR"
+/* .IP "\fBopen\fR \fImaptype:mapname instance-flags\fR"
 /*	Open the table with type \fImaptype\fR and name \fImapname\fR,
-/*	as controlled by \fIflags\fR. The reply includes the \fImaptype\fR
-/*	dependent flags (to distinguish a fixed string table from a regular
-/*	expression table).
-/* .IP "\fBlookup\fR \fImaptype:mapname flags key\fR"
-/*	Look up the data stored under the requested key.
-/*	The reply is the request completion status code and
-/*	the lookup result value.
-/*	The \fImaptype:mapname\fR and \fIflags\fR are the same
+/*	with initial dictionary flags \fIinstance-flags\fR. The reply
+/*	contains the actual dictionary flags (for example, to distinguish
+/*	a fixed-string table from a regular-expression table).
+/* .IP "\fBlookup\fR \fImaptype:mapname instance-flags request-flags key\fR"
+/*	Look up the data stored under the requested key using the
+/*	dictionary flags in \fIrequest-flags\fR.
+/*	The reply contains the request completion status code, the
+/*	resulting dictionary flags, and the lookup result value.
+/*	The \fImaptype:mapname\fR and \fIinstance-flags\fR are the same
 /*	as with the \fBopen\fR request.
-/* .IP "\fBupdate\fR \fImaptype:mapname flags key value\fR"
-/*	Update the data stored under the requested key.
-/*	The reply is the request completion status code.
-/*	The \fImaptype:mapname\fR and \fIflags\fR are the same
+/* .IP "\fBupdate\fR \fImaptype:mapname instance-flags request-flags key value\fR"
+/*	Update the data stored under the requested key using the
+/*	dictionary flags in \fIrequest-flags\fR.
+/*	The reply contains the request completion status code and the
+/*	resulting dictionary flags.
+/*	The \fImaptype:mapname\fR and \fIinstance-flags\fR are the same
 /*	as with the \fBopen\fR request.
 /* .sp
 /*	To implement single-updater maps, specify a process limit
@@ -62,29 +65,36 @@
 /*	service.
 /* .sp
 /*	This request is supported in Postfix 2.5 and later.
-/* .IP "\fBdelete\fR \fImaptype:mapname flags key\fR"
-/*	Delete the data stored under the requested key.
-/*	The reply is the request completion status code.
-/*	The \fImaptype:mapname\fR and \fIflags\fR are the same
+/* .IP "\fBdelete\fR \fImaptype:mapname instance-flags request-flags key\fR"
+/*	Delete the data stored under the requested key, using the
+/*	dictionary flags in \fIrequest-flags\fR.
+/*	The reply contains the request completion status code and the
+/*	resulting dictionary flags.
+/*	The \fImaptype:mapname\fR and \fIinstance-flags\fR are the same
 /*	as with the \fBopen\fR request.
 /* .sp
 /*	This request is supported in Postfix 2.5 and later.
-/* .IP "\fBsequence\fR \fImaptype:mapname flags function\fR"
-/*	Iterate over the specified database. The \fIfunction\fR
-/*	is one of DICT_SEQ_FUN_FIRST or DICT_SEQ_FUN_NEXT.
-/*	The reply is the request completion status code and
-/*	a lookup key and result value, if found.
+/* .IP "\fBsequence\fR \fImaptype:mapname instance-flags request-flags function\fR"
+/*	Iterate over the specified database, using the dictionary flags
+/*	in \fIrequest-flags\fR. The \fIfunction\fR is either
+/*	DICT_SEQ_FUN_FIRST or DICT_SEQ_FUN_NEXT.
+/*	The reply contains the request completion status code, the
+/*	resulting dictionary flags, and a lookup key and result value
+/*	if found.
+/*	The \fImaptype:mapname\fR and \fIinstance-flags\fR are the same
+/*	as with the \fBopen\fR request.
 /* .sp
 /*	This request is supported in Postfix 2.9 and later.
+/* .IP "Not implemented: close"
+/*	There is no \fBclose\fR request, nor are tables implicitly closed
+/*	when a client disconnects. The purpose is to share tables among
+/*	multiple client processes. Due to the absence of an explicit or
+/*	implicit \fBclose\fR, updates are forced to be synchronous.
 /* .PP
 /*	The request completion status is one of OK, RETRY, NOKEY
 /*	(lookup failed because the key was not found), BAD (malformed
 /*	request) or DENY (the table is not approved for proxy read
 /*	or update access).
-/*
-/*	There is no \fBclose\fR command, nor are tables implicitly closed
-/*	when a client disconnects. The purpose is to share tables among
-/*	multiple client processes.
 /* SERVER PROCESS MANAGEMENT
 /* .ad
 /* .fi
@@ -215,6 +225,9 @@
 /*	Google, Inc.
 /*	111 8th Avenue
 /*	New York, NY 10011, USA
+/*
+/*	Wietse Venema
+/*	porcupine.org
 /*--*/
 
 /* System library. */
@@ -320,9 +333,11 @@ static char *get_nested_dict_name(char *type_name)
 
 /* proxy_map_find - look up or open table */
 
-static DICT *proxy_map_find(const char *map_type_name, int request_flags,
+static DICT *proxy_map_find(const char *map_type_name, int inst_flags,
 			            int *statp)
 {
+    static HTABLE *new_flags;
+    HTABLE_INFO *ht;
     DICT   *dict;
 
 #define PROXY_COLON	DICT_TYPE_PROXY ":"
@@ -354,25 +369,25 @@ static DICT *proxy_map_find(const char *map_type_name, int request_flags,
 
     /*
      * Open one instance of a map for each combination of name+flags.
-     * 
-     * Assume that a map instance can be shared among clients with different
-     * paranoia flag settings and with different map lookup flag settings.
-     * 
-     * XXX The open() flags are passed implicitly, via the selection of the
-     * service name. For a more sophisticated interface, appropriate subsets
-     * of open() flags should be received directly from the client.
      */
-    vstring_sprintf(map_type_name_flags, "%s:%s", map_type_name,
-		    dict_flags_str(request_flags & DICT_FLAG_INST_MASK));
-    if (msg_verbose)
-	msg_info("proxy_map_find: %s", STR(map_type_name_flags));
-    if ((dict = dict_handle(STR(map_type_name_flags))) == 0) {
-	dict = dict_open(map_type_name, proxy_writer ?
-			 WRITE_OPEN_FLAGS : READ_OPEN_FLAGS,
-			 request_flags);
-	if (dict == 0)
-	    msg_panic("proxy_map_find: dict_open null result");
-	dict_register(STR(map_type_name_flags), dict);
+    dict = dict_open(map_type_name, proxy_writer ?
+		     WRITE_OPEN_FLAGS : READ_OPEN_FLAGS,
+		     inst_flags);
+    if (dict == 0)
+	msg_panic("proxy_map_find: dict_open null result");
+
+    /*
+     * Remember the mapping from dict->reg_name to the dict->flags of a
+     * newly-initialized instance. Always return an instance with those new
+     * dict->flags, to avoid crosstalk between different clients.
+     */
+    if (new_flags == 0)
+	new_flags = htable_create(100);
+    if ((ht = htable_locate(new_flags, dict->reg_name)) == 0) {
+	(void) htable_enter(new_flags, dict->reg_name,
+			    CAST_INT_TO_VOID_PTR(dict->flags));
+    } else {
+	dict->flags = CAST_ANY_PTR_TO_INT(ht->value);
     }
     dict->error = 0;
     return (dict);
@@ -382,6 +397,7 @@ static DICT *proxy_map_find(const char *map_type_name, int request_flags,
 
 static void proxymap_sequence_service(VSTREAM *client_stream)
 {
+    int     inst_flags;
     int     request_flags;
     DICT   *dict;
     int     request_func;
@@ -395,19 +411,19 @@ static void proxymap_sequence_service(VSTREAM *client_stream)
      */
     if (attr_scan(client_stream, ATTR_FLAG_STRICT,
 		  RECV_ATTR_STR(MAIL_ATTR_TABLE, request_map),
+		  RECV_ATTR_INT(MAIL_ATTR_INST_FLAGS, &inst_flags),
 		  RECV_ATTR_INT(MAIL_ATTR_FLAGS, &request_flags),
 		  RECV_ATTR_INT(MAIL_ATTR_FUNC, &request_func),
-		  ATTR_TYPE_END) != 3
+		  ATTR_TYPE_END) != 4
 	|| (request_func != DICT_SEQ_FUN_FIRST
 	    && request_func != DICT_SEQ_FUN_NEXT)) {
 	reply_status = PROXY_STAT_BAD;
 	reply_key = reply_value = "";
-    } else if ((dict = proxy_map_find(STR(request_map), request_flags,
+    } else if ((dict = proxy_map_find(STR(request_map), inst_flags,
 				      &reply_status)) == 0) {
 	reply_key = reply_value = "";
     } else {
-	dict->flags = ((dict->flags & ~DICT_FLAG_RQST_MASK)
-		       | (request_flags & DICT_FLAG_RQST_MASK));
+	dict->flags = request_flags;
 	dict_status = dict_seq(dict, request_func, &reply_key, &reply_value);
 	if (dict_status == 0) {
 	    reply_status = PROXY_STAT_OK;
@@ -426,6 +442,7 @@ static void proxymap_sequence_service(VSTREAM *client_stream)
      */
     attr_print(client_stream, ATTR_FLAG_NONE,
 	       SEND_ATTR_INT(MAIL_ATTR_STATUS, reply_status),
+	       SEND_ATTR_INT(MAIL_ATTR_FLAGS, dict->flags),
 	       SEND_ATTR_STR(MAIL_ATTR_KEY, reply_key),
 	       SEND_ATTR_STR(MAIL_ATTR_VALUE, reply_value),
 	       ATTR_TYPE_END);
@@ -435,6 +452,7 @@ static void proxymap_sequence_service(VSTREAM *client_stream)
 
 static void proxymap_lookup_service(VSTREAM *client_stream)
 {
+    int     inst_flags;
     int     request_flags;
     DICT   *dict;
     const char *reply_value;
@@ -445,16 +463,16 @@ static void proxymap_lookup_service(VSTREAM *client_stream)
      */
     if (attr_scan(client_stream, ATTR_FLAG_STRICT,
 		  RECV_ATTR_STR(MAIL_ATTR_TABLE, request_map),
+		  RECV_ATTR_INT(MAIL_ATTR_INST_FLAGS, &inst_flags),
 		  RECV_ATTR_INT(MAIL_ATTR_FLAGS, &request_flags),
 		  RECV_ATTR_STR(MAIL_ATTR_KEY, request_key),
-		  ATTR_TYPE_END) != 3) {
+		  ATTR_TYPE_END) != 4) {
 	reply_status = PROXY_STAT_BAD;
 	reply_value = "";
-    } else if ((dict = proxy_map_find(STR(request_map), request_flags,
+    } else if ((dict = proxy_map_find(STR(request_map), inst_flags,
 				      &reply_status)) == 0) {
 	reply_value = "";
-    } else if (dict->flags = ((dict->flags & ~DICT_FLAG_RQST_MASK)
-			      | (request_flags & DICT_FLAG_RQST_MASK)),
+    } else if (dict->flags = request_flags,
 	       (reply_value = dict_get(dict, STR(request_key))) != 0) {
 	reply_status = PROXY_STAT_OK;
     } else if (dict->error == 0) {
@@ -471,6 +489,7 @@ static void proxymap_lookup_service(VSTREAM *client_stream)
      */
     attr_print(client_stream, ATTR_FLAG_NONE,
 	       SEND_ATTR_INT(MAIL_ATTR_STATUS, reply_status),
+	       SEND_ATTR_INT(MAIL_ATTR_FLAGS, dict->flags),
 	       SEND_ATTR_STR(MAIL_ATTR_VALUE, reply_value),
 	       ATTR_TYPE_END);
 }
@@ -479,6 +498,7 @@ static void proxymap_lookup_service(VSTREAM *client_stream)
 
 static void proxymap_update_service(VSTREAM *client_stream)
 {
+    int     inst_flags;
     int     request_flags;
     DICT   *dict;
     int     dict_status;
@@ -495,21 +515,22 @@ static void proxymap_update_service(VSTREAM *client_stream)
      */
     if (attr_scan(client_stream, ATTR_FLAG_STRICT,
 		  RECV_ATTR_STR(MAIL_ATTR_TABLE, request_map),
+		  RECV_ATTR_INT(MAIL_ATTR_INST_FLAGS, &inst_flags),
 		  RECV_ATTR_INT(MAIL_ATTR_FLAGS, &request_flags),
 		  RECV_ATTR_STR(MAIL_ATTR_KEY, request_key),
 		  RECV_ATTR_STR(MAIL_ATTR_VALUE, request_value),
-		  ATTR_TYPE_END) != 4) {
+		  ATTR_TYPE_END) != 5) {
 	reply_status = PROXY_STAT_BAD;
     } else if (proxy_writer == 0) {
 	msg_warn("refusing %s update request on non-%s service",
 		 STR(request_map), MAIL_SERVICE_PROXYWRITE);
 	reply_status = PROXY_STAT_DENY;
-    } else if ((dict = proxy_map_find(STR(request_map), request_flags,
+    } else if ((dict = proxy_map_find(STR(request_map), inst_flags,
 				      &reply_status)) == 0) {
 	 /* void */ ;
     } else {
-	dict->flags = ((dict->flags & ~DICT_FLAG_RQST_MASK)
-		       | (request_flags & DICT_FLAG_RQST_MASK)
+	/* Sync the table now. Don't abort on duplicate update. */
+	dict->flags = (request_flags
 		       | DICT_FLAG_SYNC_UPDATE | DICT_FLAG_DUP_REPLACE);
 	dict_status = dict_put(dict, STR(request_key), STR(request_value));
 	if (dict_status == 0) {
@@ -527,6 +548,7 @@ static void proxymap_update_service(VSTREAM *client_stream)
      */
     attr_print(client_stream, ATTR_FLAG_NONE,
 	       SEND_ATTR_INT(MAIL_ATTR_STATUS, reply_status),
+	       SEND_ATTR_INT(MAIL_ATTR_FLAGS, dict->flags),
 	       ATTR_TYPE_END);
 }
 
@@ -534,6 +556,7 @@ static void proxymap_update_service(VSTREAM *client_stream)
 
 static void proxymap_delete_service(VSTREAM *client_stream)
 {
+    int     inst_flags;
     int     request_flags;
     DICT   *dict;
     int     dict_status;
@@ -547,20 +570,21 @@ static void proxymap_delete_service(VSTREAM *client_stream)
      */
     if (attr_scan(client_stream, ATTR_FLAG_STRICT,
 		  RECV_ATTR_STR(MAIL_ATTR_TABLE, request_map),
+		  RECV_ATTR_INT(MAIL_ATTR_INST_FLAGS, &inst_flags),
 		  RECV_ATTR_INT(MAIL_ATTR_FLAGS, &request_flags),
 		  RECV_ATTR_STR(MAIL_ATTR_KEY, request_key),
-		  ATTR_TYPE_END) != 3) {
+		  ATTR_TYPE_END) != 4) {
 	reply_status = PROXY_STAT_BAD;
     } else if (proxy_writer == 0) {
 	msg_warn("refusing %s delete request on non-%s service",
 		 STR(request_map), MAIL_SERVICE_PROXYWRITE);
 	reply_status = PROXY_STAT_DENY;
-    } else if ((dict = proxy_map_find(STR(request_map), request_flags,
+    } else if ((dict = proxy_map_find(STR(request_map), inst_flags,
 				      &reply_status)) == 0) {
 	 /* void */ ;
     } else {
-	dict->flags = ((dict->flags & ~DICT_FLAG_RQST_MASK)
-		       | (request_flags & DICT_FLAG_RQST_MASK)
+	/* Sync the table now. There is no close() request. */
+	dict->flags = (request_flags
 		       | DICT_FLAG_SYNC_UPDATE);
 	dict_status = dict_del(dict, STR(request_key));
 	if (dict_status == 0) {
@@ -578,6 +602,7 @@ static void proxymap_delete_service(VSTREAM *client_stream)
      */
     attr_print(client_stream, ATTR_FLAG_NONE,
 	       SEND_ATTR_INT(MAIL_ATTR_STATUS, reply_status),
+	       SEND_ATTR_INT(MAIL_ATTR_FLAGS, dict->flags),
 	       ATTR_TYPE_END);
 }
 
@@ -585,7 +610,7 @@ static void proxymap_delete_service(VSTREAM *client_stream)
 
 static void proxymap_open_service(VSTREAM *client_stream)
 {
-    int     request_flags;
+    int     inst_flags;
     DICT   *dict;
     int     reply_status;
     int     reply_flags;
@@ -595,11 +620,11 @@ static void proxymap_open_service(VSTREAM *client_stream)
      */
     if (attr_scan(client_stream, ATTR_FLAG_STRICT,
 		  RECV_ATTR_STR(MAIL_ATTR_TABLE, request_map),
-		  RECV_ATTR_INT(MAIL_ATTR_FLAGS, &request_flags),
+		  RECV_ATTR_INT(MAIL_ATTR_INST_FLAGS, &inst_flags),
 		  ATTR_TYPE_END) != 2) {
 	reply_status = PROXY_STAT_BAD;
 	reply_flags = 0;
-    } else if ((dict = proxy_map_find(STR(request_map), request_flags,
+    } else if ((dict = proxy_map_find(STR(request_map), inst_flags,
 				      &reply_status)) == 0) {
 	reply_flags = 0;
     } else {

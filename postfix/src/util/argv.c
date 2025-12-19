@@ -31,6 +31,10 @@
 /*	char	*arg;
 /*	ssize_t	arg_len;
 /*
+/*	ARGV	*argv_addv(argvp, argv)
+/*	ARGV	*argvp;
+/*	const char **argv;
+/*
 /*	void	argv_terminate(argvp);
 /*	ARGV	*argvp;
 /*
@@ -60,6 +64,10 @@
 /*
 /*	void	ARGV_FAKE_BEGIN(argv, arg)
 /*	const char *arg;
+/*
+/*	void	ARGV_FAKE2_BEGIN(argv, arg1, arg2)
+/*	const char *arg1;
+/*	const char *arg2;
 /*
 /*	void	ARGV_FAKE_END
 /* DESCRIPTION
@@ -94,6 +102,10 @@
 /*	argv_addn() is like argv_add(), but each string is followed
 /*	by a string length argument.
 /*
+/*	argv_addv() optionally creates an ARGV when the first argument
+/*	is a null pointer, and appends a null-terminated list of
+/*	strings. The result is null terminated.
+/*
 /*	argv_free() releases storage for a string array, and conveniently
 /*	returns a null pointer.
 /*
@@ -126,6 +138,9 @@
 /*	implementation allocates no heap memory and creates no copy
 /*	of the second argument.  ARGV_FAKE_END closes the statement
 /*	block and thereby releases storage.
+/*
+/*	ARGV_FAKE2_BEGIN/END provide the same functionality for a pair
+/*	of strings.
 /* SEE ALSO
 /*	msg(3) diagnostics interface
 /* DIAGNOSTICS
@@ -144,6 +159,9 @@
 /*	Google, Inc.
 /*	111 8th Avenue
 /*	New York, NY 10011, USA
+/*
+/*	Wietse Venema
+/*	porcupine.org
 /*--*/
 
 /* System libraries. */
@@ -299,6 +317,23 @@ void    argv_addn(ARGV *argvp,...)
     }
     va_end(ap);
     argvp->argv[argvp->argc] = 0;
+}
+
+/* argv_addv - optionally create ARGV, append string vector */
+
+ARGV   *argv_addv(ARGV *argvp, const char *const * argv)
+{
+    const char *const * cpp;
+
+    if (argvp == 0) {
+	for (cpp = argv; *cpp; cpp++)
+	     /* void */ ;
+	argvp = argv_alloc(cpp - argv);
+    }
+    for (cpp = argv; *cpp; cpp++)
+	argv_add(argvp, *cpp, (char *) 0);
+    argvp->argv[argvp->argc] = 0;
+    return (argvp);
 }
 
 /* argv_terminate - terminate string array */
@@ -602,6 +637,23 @@ static ARGV *test_argv_join(const TEST_CASE *tp, ARGV *argvp)
     return (argvp);
 }
 
+/* test_argv_addv_appends - populate result */
+
+static ARGV *test_argv_addv_appends(const TEST_CASE *tp, ARGV *argvp)
+{
+    argvp = argv_addv(argvp, tp->inputs);
+    return (argvp);
+}
+
+/* test_argv_addv_creates_appends - populate result */
+
+static ARGV *test_argv_addv_creates(const TEST_CASE *tp, ARGV *argvp)
+{
+    argv_free(argvp);
+    argvp = argv_addv((ARGV *) 0, tp->inputs);
+    return (argvp);
+}
+
 /* test_argv_verify - verify result */
 
 static int test_argv_verify(const TEST_CASE *tp, ARGV *argvp)
@@ -737,6 +789,14 @@ static const TEST_CASE test_cases[] = {
 	{0}, 0, test_argv_join,
 	0, 1, {"", 0}, ':'
     },
+    {"argv_addv appends to ARGV",
+	{"foo", "baz", "bar", 0}, /* ignored */ 0, test_argv_addv_appends,
+	0, 3, {"foo", "baz", "bar", 0}
+    },
+    {"argv_addv creates ARGV",
+	{"foo", "baz", "bar", 0}, /* ignored */ 0, test_argv_addv_creates,
+	0, 3, {"foo", "baz", "bar", 0}
+    },
     0,
 };
 
@@ -754,7 +814,7 @@ int     main(int argc, char **argv)
 
 	argvp = argv_alloc(1);
 	if (setjmp(test_panic_jbuf) == 0)
-	    tp->populate_fn(tp, argvp);
+	    argvp = tp->populate_fn(tp, argvp);
 	test_failed = test_argv_verify(tp, argvp);
 	if (test_failed) {
 	    msg_info("%s: FAIL", tp->label);

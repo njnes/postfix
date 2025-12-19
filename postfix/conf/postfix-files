@@ -320,6 +320,7 @@ $readme_directory/QMQP_README:f:root:-:644:o
 $readme_directory/QSHAPE_README:f:root:-:644
 $readme_directory/RELEASE_NOTES:f:root:-:644
 $readme_directory/RESTRICTION_CLASS_README:f:root:-:644
+$readme_directory/REQUIRETLS_README:f:root:-:644
 $readme_directory/SASL_README:f:root:-:644
 $readme_directory/SCHEDULER_README:f:root:-:644
 $readme_directory/SMTPD_ACCESS_README:f:root:-:644
@@ -330,6 +331,7 @@ $readme_directory/STANDARD_CONFIGURATION_README:f:root:-:644
 $readme_directory/STRESS_README:f:root:-:644
 $readme_directory/TLS_LEGACY_README:f:root:-:644
 $readme_directory/TLS_README:f:root:-:644
+$readme_directory/TLSRPT_README:f:root:-:644
 $readme_directory/TUNING_README:f:root:-:644
 $readme_directory/ULTRIX_README:f:root:-:644
 $readme_directory/UUCP_README:f:root:-:644
@@ -382,6 +384,7 @@ $html_directory/POSTSCREEN_README.html:f:root:-:644
 $html_directory/QMQP_README.html:f:root:-:644:o
 $html_directory/QSHAPE_README.html:f:root:-:644
 $html_directory/RESTRICTION_CLASS_README.html:f:root:-:644
+$html_directory/REQUIRETLS_README.html:f:root:-:644
 $html_directory/SASL_README.html:f:root:-:644
 $html_directory/SCHEDULER_README.html:f:root:-:644
 $html_directory/SMTPD_ACCESS_README.html:f:root:-:644
@@ -392,6 +395,7 @@ $html_directory/STANDARD_CONFIGURATION_README.html:f:root:-:644
 $html_directory/STRESS_README.html:f:root:-:644
 $html_directory/TLS_LEGACY_README.html:f:root:-:644
 $html_directory/TLS_README.html:f:root:-:644
+$html_directory/TLSRPT_README.html:f:root:-:644
 $html_directory/TUNING_README.html:f:root:-:644
 $html_directory/ULTRIX_README.html:f:root:-:644:o
 $html_directory/UUCP_README.html:f:root:-:644

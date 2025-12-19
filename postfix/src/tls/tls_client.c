@@ -152,6 +152,9 @@
 /*
 /*	Victor Duchovni
 /*	Morgan Stanley
+/*
+/*	Wietse Venema
+/*	porcupine.org
 /*--*/
 
 /* System library. */
@@ -160,6 +163,7 @@
 
 #ifdef USE_TLS
 #include <string.h>
+#include <tlsrpt_wrapper.h>
 
 #ifdef STRCASECMP_IN_STRINGS_H
 #include <strings.h>
@@ -264,16 +268,22 @@ static int new_client_session_cb(SSL *ssl, SSL_SESSION *session)
 	msg_panic("%s: null session cache type in new session callback",
 		  myname);
 
-    if (TLScontext->log_mask & TLS_LOG_CACHE)
-	/* serverid contains transport:addr:port information */
-	msg_info("save session %s to %s cache",
-		 TLScontext->serverid, TLScontext->cache_type);
-
-    /*
+    /*-
+     * Store only the first ticket for a given connection.
+     * - Even if the server offers multiple tickets, we have no mechanism to
+     *   store or use multiple concurrent tickets for the same nexthop.
+     *
      * Passivate and save the session object. Errors are non-fatal, since
      * caching is only an optimization.
      */
-    if ((session_data = tls_session_passivate(session)) != 0) {
+    if (TLScontext->ticketed == 0 &&
+	(session_data = tls_session_passivate(session)) != 0) {
+	TLScontext->ticketed = 1;
+	if (TLScontext->log_mask & TLS_LOG_CACHE)
+	    /* serverid contains transport:addr:port information */
+	    msg_info("save session %s to %s cache",
+		     TLScontext->serverid, TLScontext->cache_type);
+
 	tls_mgr_update(TLScontext->cache_type, TLScontext->serverid,
 		       STR(session_data), LEN(session_data));
 	vstring_free(session_data);
@@ -309,6 +319,7 @@ static void uncache_session(SSL_CTX *ctx, TLS_SESS_STATE *TLScontext)
 static void verify_x509(TLS_SESS_STATE *TLScontext, X509 *peercert,
 			        const TLS_CLIENT_START_PROPS *props)
 {
+    int     x509_err = SSL_get_verify_result(TLScontext->con);
 
     /*
      * On exit both peer_CN and issuer_CN should be set.
@@ -320,7 +331,7 @@ static void verify_x509(TLS_SESS_STATE *TLScontext, X509 *peercert,
      * Is the certificate trust chain trusted and matched?  Any required name
      * checks are now performed internally in OpenSSL.
      */
-    if (SSL_get_verify_result(TLScontext->con) == X509_V_OK) {
+    if (x509_err == X509_V_OK) {
 	TLScontext->peer_status |= TLS_CERT_FLAG_TRUSTED;
 	if (TLScontext->must_fail) {
 	    msg_panic("%s: cert valid despite trust init failure",
@@ -352,6 +363,13 @@ static void verify_x509(TLS_SESS_STATE *TLScontext, X509 *peercert,
 		tls_dane_log(TLScontext);
 	    }
 	}
+    } else if (TLS_MUST_MATCH(TLScontext->level) &&
+	       x509_err == X509_V_ERR_HOSTNAME_MISMATCH) {
+	/*
+	 * If the only error is a hostname mismatch, the certificate must have
+	 * been trusted.
+	 */
+	TLScontext->peer_status |= TLS_CERT_FLAG_TRUSTED;
     }
 
     /*
@@ -363,7 +381,7 @@ static void verify_x509(TLS_SESS_STATE *TLScontext, X509 *peercert,
     if (!TLS_CERT_IS_MATCHED(TLScontext)
 	&& (TLScontext->log_mask & TLS_LOG_UNTRUSTED)) {
 	if (TLScontext->session_reused == 0)
-	    tls_log_verify_error(TLScontext);
+	    tls_log_verify_error(TLScontext, props->tlsrpt);
 	else
 	    msg_info("%s: re-using session with untrusted peer credential, "
 		     "look for details earlier in the log", props->namaddr);
@@ -407,7 +425,7 @@ static void verify_rpk(TLS_SESS_STATE *TLScontext, EVP_PKEY *peerpkey,
     if (!TLS_CERT_IS_MATCHED(TLScontext)
 	&& (TLScontext->log_mask & TLS_LOG_UNTRUSTED)) {
 	if (TLScontext->session_reused == 0)
-	    tls_log_verify_error(TLScontext);
+	    tls_log_verify_error(TLScontext, props->tlsrpt);
 	else
 	    msg_info("%s: re-using session with untrusted certificate, "
 		     "look for details earlier in the log", props->namaddr);
@@ -579,6 +597,7 @@ static int tls_auth_enable(TLS_SESS_STATE *TLScontext,
 	 * therefore valid for use with SNI.
 	 */
 	if (SSL_dane_enable(TLScontext->con, 0) <= 0) {
+	    /* TLSRPT: Local resource error, don't report. */
 	    msg_warn("%s: error enabling DANE-based certificate validation",
 		     TLScontext->namaddr);
 	    tls_print_errors();
@@ -595,6 +614,7 @@ static int tls_auth_enable(TLS_SESS_STATE *TLScontext,
     case TLS_LEV_FPRINT:
 	/* Synthetic DANE for fingerprint security */
 	if (SSL_dane_enable(TLScontext->con, 0) <= 0) {
+	    /* TLSRPT: Local resource error, don't report. */
 	    msg_warn("%s: error enabling fingerprint certificate validation",
 		     props->namaddr);
 	    tls_print_errors();
@@ -608,6 +628,7 @@ static int tls_auth_enable(TLS_SESS_STATE *TLScontext,
 	if (TLScontext->dane != 0 && TLScontext->dane->tlsa != 0) {
 	    /* Synthetic DANE for per-destination trust-anchors */
 	    if (SSL_dane_enable(TLScontext->con, NULL) <= 0) {
+		/* TLSRPT: Local resource error, don't report. */
 		msg_warn("%s: error configuring local trust anchors",
 			 props->namaddr);
 		tls_print_errors();
@@ -622,6 +643,7 @@ static int tls_auth_enable(TLS_SESS_STATE *TLScontext,
 
     if (sni) {
 	if (strlen(sni) > TLSEXT_MAXLEN_host_name) {
+	    /* TLSRPT: Local configuration error, don't report. */
 	    msg_warn("%s: ignoring too long SNI hostname: %.100s",
 		     props->namaddr, sni);
 	    return (0);
@@ -633,6 +655,7 @@ static int tls_auth_enable(TLS_SESS_STATE *TLScontext,
 	 * failed to send the SNI name, we have little choice but to abort.
 	 */
 	if (!SSL_set_tlsext_host_name(TLScontext->con, sni)) {
+	    /* TLSRPT: Local resource or configuration error, don't report. */
 	    msg_warn("%s: error setting SNI hostname to: %s", props->namaddr,
 		     sni);
 	    return (0);
@@ -835,34 +858,34 @@ TLS_APPL_STATE *tls_client_init(const TLS_CLIENT_INIT_PROPS *props)
     }
 
     /*
-     * Enable support for client->server raw public keys, provided we actually
-     * have keys to send.  They'll only be used if the server also enables
-     * client RPKs.
-     *
+     * Enable support for client->server raw public keys, provided we
+     * actually have keys to send.  They'll only be used if the server also
+     * enables client RPKs.
+     * 
      * XXX: When the server requests client auth, the TLS 1.2 protocol does not
      * provide an unambiguous mechanism for the client to not send an RPK (as
      * it can with client X.509 certs or TLS 1.3).  This is why we don't just
      * enable client RPK also with no keys in hand.
-     *
+     * 
      * A very unlikely scenario is that the server allows clients to not send
-     * keys, but only accepts keys for a set of algorithms we don't have.  Then
-     * we still can't send a key, but have agreed to RPK.  OpenSSL will attempt
-     * to send an empty RPK even with TLS 1.2 (and will accept such a message),
-     * but other implementations may be more strict.
-     *
+     * keys, but only accepts keys for a set of algorithms we don't have.
+     * Then we still can't send a key, but have agreed to RPK.  OpenSSL will
+     * attempt to send an empty RPK even with TLS 1.2 (and will accept such a
+     * message), but other implementations may be more strict.
+     * 
      * We could limit client RPK support to connections that support only TLS
      * 1.3 and up, but that's practical only decades in the future, and the
      * risk scenario is contrived and very unlikely.
      */
     if (SSL_CTX_get0_certificate(client_ctx) != NULL &&
-        SSL_CTX_get0_privatekey(client_ctx) != NULL)
-        tls_enable_client_rpk(client_ctx, NULL);
+	SSL_CTX_get0_privatekey(client_ctx) != NULL)
+	tls_enable_client_rpk(client_ctx, NULL);
 
     /*
      * With OpenSSL 1.0.2 and later the client EECDH curve list becomes
      * configurable with the preferred curve negotiated via the supported
-     * curves extension.  With OpenSSL 3.0 and TLS 1.3, the same applies
-     * to the FFDHE groups which become part of a unified "groups" list.
+     * curves extension.  With OpenSSL 3.0 and TLS 1.3, the same applies to
+     * the FFDHE groups which become part of a unified "groups" list.
      */
     tls_auto_groups(client_ctx, var_tls_eecdh_auto, var_tls_ffdhe_auto);
 
@@ -975,6 +998,7 @@ TLS_SESS_STATE *tls_client_start(const TLS_CLIENT_START_PROPS *props)
      */
     protomask = tls_proto_mask_lims(props->protocols, &min_proto, &max_proto);
     if (protomask == TLS_PROTOCOL_INVALID) {
+	/* TLSRPT: Local configuration error, don't report. */
 	/* tls_protocol_mask() logs no warning. */
 	msg_warn("%s: Invalid TLS protocol list \"%s\": aborting TLS session",
 		 props->namaddr, props->protocols);
@@ -1006,6 +1030,7 @@ TLS_SESS_STATE *tls_client_start(const TLS_CLIENT_START_PROPS *props)
     TLScontext->level = props->tls_level;
 
     if ((TLScontext->con = SSL_new(app_ctx->ssl_ctx)) == NULL) {
+	/* TLSRPT: Local resource error, don't report. */
 	msg_warn("Could not allocate 'TLScontext->con' with SSL_new()");
 	tls_print_errors();
 	tls_free_context(TLScontext);
@@ -1022,6 +1047,7 @@ TLS_SESS_STATE *tls_client_start(const TLS_CLIENT_START_PROPS *props)
     cipher_list = tls_set_ciphers(TLScontext, props->cipher_grade,
 				  props->cipher_exclusions);
     if (cipher_list == 0) {
+	/* TLSRPT: Local configuration error, don't report. */
 	/* already warned */
 	tls_free_context(TLScontext);
 	return (0);
@@ -1036,6 +1062,7 @@ TLS_SESS_STATE *tls_client_start(const TLS_CLIENT_START_PROPS *props)
     TLScontext->dane = props->dane;
 
     if (!SSL_set_ex_data(TLScontext->con, TLScontext_index, TLScontext)) {
+	/* TLSRPT: Local resource error, don't report. */
 	msg_warn("Could not set application data for 'TLScontext->con'");
 	tls_print_errors();
 	tls_free_context(TLScontext);
@@ -1069,6 +1096,7 @@ TLS_SESS_STATE *tls_client_start(const TLS_CLIENT_START_PROPS *props)
      * early.
      */
     if (!tls_auth_enable(TLScontext, props)) {
+	/* Already warned and reported TLSRPT result. */
 	tls_free_context(TLScontext);
 	return (0);
     }
@@ -1105,6 +1133,13 @@ TLS_SESS_STATE *tls_client_start(const TLS_CLIENT_START_PROPS *props)
 	    switch (TLScontext->level) {
 	    case TLS_LEV_HALF_DANE:
 	    case TLS_LEV_DANE:
+#ifdef USE_TLSRPT
+		if (props->tlsrpt) {
+		    trw_report_failure(props->tlsrpt, TLSRPT_TLSA_INVALID,
+				        /* additional_info= */ (char *) 0,
+				       "all-TLSA-records-unusable");
+		}
+#endif
 		msg_warn("%s: all TLSA records unusable, fallback to "
 			 "unauthenticated TLS", TLScontext->namaddr);
 		must_fail = 0;
@@ -1112,13 +1147,34 @@ TLS_SESS_STATE *tls_client_start(const TLS_CLIENT_START_PROPS *props)
 		break;
 
 	    case TLS_LEV_FPRINT:
+#ifdef USE_TLSRPT
+		if (props->tlsrpt) {
+		    trw_report_failure(props->tlsrpt, TLSRPT_VALIDATION_FAILURE,
+				        /* additional_info= */ (char *) 0,
+				       "all-fingerprints-unusable");
+		}
+#endif
 		msg_warn("%s: all fingerprints unusable", TLScontext->namaddr);
 		break;
 	    case TLS_LEV_DANE_ONLY:
+#ifdef USE_TLSRPT
+		if (props->tlsrpt) {
+		    trw_report_failure(props->tlsrpt, TLSRPT_TLSA_INVALID,
+				        /* additional_info= */ (char *) 0,
+				       "all-TLSA-records-unusable");
+		}
+#endif
 		msg_warn("%s: all TLSA records unusable", TLScontext->namaddr);
 		break;
 	    case TLS_LEV_SECURE:
 	    case TLS_LEV_VERIFY:
+#ifdef USE_TLSRPT
+		if (props->tlsrpt) {
+		    trw_report_failure(props->tlsrpt, TLSRPT_VALIDATION_FAILURE,
+				        /* additional_info= */ (char *) 0,
+				       "all-trust-anchors-unusable");
+		}
+#endif
 		msg_warn("%s: all trust anchors unusable", TLScontext->namaddr);
 		break;
 	    }
@@ -1194,6 +1250,7 @@ TLS_SESS_STATE *tls_client_start(const TLS_CLIENT_START_PROPS *props)
      */
     if (SSL_set_fd(TLScontext->con, props->stream == 0 ? props->fd :
 		   vstream_fileno(props->stream)) != 1) {
+	/* TLSRPT: Local resource error, don't report. */
 	msg_info("SSL_set_fd error to %s", props->namaddr);
 	tls_print_errors();
 	uncache_session(app_ctx->ssl_ctx, TLScontext);
@@ -1212,6 +1269,16 @@ TLS_SESS_STATE *tls_client_start(const TLS_CLIENT_START_PROPS *props)
      */
     if (log_mask & TLS_LOG_TLSPKTS)
 	tls_set_bio_callback(SSL_get_rbio(TLScontext->con), tls_bio_dump_cb);
+
+    /*
+     * An external (STS) policy signaled a failure. Prevent false (PKI)
+     * certificate matches in tls_verify.c. TODO(wietse) how was this handled
+     * historically?
+     */
+    if (props->ffail_type) {
+	TLScontext->ffail_type = mystrdup(props->ffail_type);
+	TLScontext->must_fail = 1;
+    }
 
     /*
      * If we don't trigger the handshake in the library, leave control over
@@ -1245,6 +1312,12 @@ TLS_SESS_STATE *tls_client_start(const TLS_CLIENT_START_PROPS *props)
 	    msg_info("SSL_connect error to %s: lost connection",
 		     props->namaddr);
 	}
+#ifdef USE_TLSRPT
+	if (props->tlsrpt)
+	    trw_report_failure(props->tlsrpt, TLSRPT_VALIDATION_FAILURE,
+			        /* additional_info= */ (char *) 0,
+			       "tls-handshake-failure");
+#endif
 	uncache_session(app_ctx->ssl_ctx, TLScontext);
 	tls_free_context(TLScontext);
 	return (0);
@@ -1359,6 +1432,22 @@ TLS_SESS_STATE *tls_client_post_connect(TLS_SESS_STATE *TLScontext,
 	tls_log_summary(TLS_ROLE_CLIENT, TLS_USAGE_NEW, TLScontext);
 
     tls_int_seed();
+
+    /*
+     * Precondition: tls_client_start() is called only for a new TCP
+     * connection. It is never called for a reused TCP connection.
+     * 
+     * Inform the caller that they should not generate a TLSRPT 'success' or
+     * 'failure' event: either this TLS protocol engine has already generated
+     * a TLSRPT 'failure' event for this session, or this is a reused TLS
+     * session.
+     */
+#ifdef USE_TLSRPT
+    TLScontext->rpt_reported = props->tlsrpt != 0
+	&& (trw_is_reported(props->tlsrpt)
+	    || (TLScontext->session_reused
+		&& trw_is_skip_reused_hs(props->tlsrpt)));
+#endif
 
     return (TLScontext);
 }

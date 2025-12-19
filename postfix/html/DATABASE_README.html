@@ -1,5 +1,5 @@
 <!doctype html public "-//W3C//DTD HTML 4.01 Transitional//EN"
-        "http://www.w3.org/TR/html4/loose.dtd">
+        "https://www.w3.org/TR/html4/loose.dtd">
 
 <html>
 
@@ -292,6 +292,19 @@ are created with the <a href="postmap.1.html">postmap(1)</a> or <a href="postali
 databases are maintained by Postfix daemons. The lookup table name
 as used in "<a href="DATABASE_README.html#types">dbm</a>:table" is the database file name without the ".dir"
 or ".pag" suffix.  </dd>
+
+<dt> <b>debug</b> </dt>
+
+<dd>
+<p> An adapter for another table that causes all accesses to be
+logged.  Example usage: "debug:<a href="DATABASE_README.html#types">hash</a>:/etc/postfix/example".  The
+formats of the log messages are unspecified and subject to change.
+Warning: If a query or the underlying table contains sensitive
+information (such as a password), that information might be
+logged. </p>
+
+<p> This feature is available with Postfix 3.11 and later. </p>
+</dd>
 
 <dt> <b>environ</b> </dt>
 

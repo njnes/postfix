@@ -119,7 +119,7 @@ typedef struct {
   * Class variables.
   */
 static int dict_sockmap_timeout = DICT_SOCKMAP_DEF_TIMEOUT;
-static int dict_sockmap_max_reply = DICT_SOCKMAP_DEF_MAX_REPLY;
+int     dict_sockmap_max_reply = DICT_SOCKMAP_DEF_MAX_REPLY;
 static int dict_sockmap_max_idle = DICT_SOCKMAP_DEF_MAX_IDLE;
 static int dict_sockmap_max_ttl = DICT_SOCKMAP_DEF_MAX_TTL;
 
@@ -380,5 +380,5 @@ DICT   *dict_sockmap_open(const char *mapname, int open_flags, int dict_flags)
     /* Don't look up parent domains or network superblocks. */
     dp->dict.flags = dict_flags | DICT_FLAG_PATTERN;
 
-    DICT_SOCKMAP_OPEN_RETURN(DICT_DEBUG (&dp->dict));
+    DICT_SOCKMAP_OPEN_RETURN(&dp->dict);
 }

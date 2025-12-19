@@ -50,7 +50,8 @@
 #define TLS_LEV_VERIFY		7	/* certificate verified */
 #define TLS_LEV_SECURE		8	/* "secure" verification */
 
-#define TLS_REQUIRED(l)		((l) > TLS_LEV_MAY)
+#define TLS_REQUIRED_BY_SECURITY_LEVEL(l) \
+				((l) > TLS_LEV_MAY)
 #define TLS_MUST_MATCH(l)	((l) > TLS_LEV_ENCRYPT)
 #define TLS_MUST_PKIX(l)	((l) >= TLS_LEV_VERIFY)
 #define TLS_OPPORTUNISTIC(l)	((l) == TLS_LEV_MAY || (l) == TLS_LEV_DANE)
@@ -123,6 +124,15 @@ extern const char *str_tls_level(int);
 #define TLS_PEEK_PEER_CERT(ssl) SSL_get_peer_certificate(ssl)
 #define TLS_FREE_PEER_CERT(x)   X509_free(x)
 #define tls_set_bio_callback    BIO_set_callback
+#endif
+
+#if OPENSSL_VERSION_PREREQ(3,2)
+#define TLS_GROUP_NAME(ssl) SSL_get0_group_name(ssl)
+#elif OPENSSL_VERSION_PREREQ(3,0)
+#define TLS_GROUP_NAME(ssl) \
+    SSL_group_to_name((ssl), SSL_get_negotiated_group(ssl))
+#else
+#define TLS_GROUP_NAME(ssl) ((const char *)0)
 #endif
 
  /*
@@ -205,7 +215,7 @@ extern TLS_DANE *tls_dane_alloc(void);
 extern void tls_tlsa_free(TLS_TLSA *);
 extern void tls_dane_free(TLS_DANE *);
 extern void tls_dane_add_fpt_digests(TLS_DANE *, int, const char *,
-					    const char *, int);
+				             const char *, int);
 extern TLS_DANE *tls_dane_resolve(unsigned, const char *, DNS_RR *, int);
 extern int tls_dane_load_trustfile(TLS_DANE *, const char *);
 
@@ -243,10 +253,11 @@ typedef struct {
     const char *srvr_sig_curve;		/* server's ECDSA curve name */
     int     srvr_sig_bits;		/* server's RSA signature key bits */
     const char *srvr_sig_dgst;		/* server's signature digest */
+    int     rpt_reported;		/* Failure was reported with TLSRPT */
     /* Private. */
     SSL    *con;
     char   *cache_type;			/* tlsmgr(8) cache type if enabled */
-    int     ticketed;			/* Session ticket issued */
+    int     ticketed;			/* Issued (server) or cached (client) */
     char   *serverid;			/* unique server identifier */
     char   *namaddr;			/* nam[addr] for logging */
     int     log_mask;			/* What to log */
@@ -261,6 +272,8 @@ typedef struct {
     int     errordepth;			/* Chain depth of error cert */
     int     errorcode;			/* First error at error depth */
     int     must_fail;			/* Failed to load trust settings */
+    char   *ffail_type;			/* Forced verification failure */
+    /* End of Private members. */
 } TLS_SESS_STATE;
 
  /*
@@ -493,6 +506,8 @@ typedef struct {
     const ARGV *matchargv;		/* Cert match patterns */
     const char *mdalg;			/* default message digest algorithm */
     const TLS_DANE *dane;		/* DANE TLSA verification */
+    struct TLSRPT_WRAPPER *tlsrpt;	/* RFC 8460 reporting */
+    char   *ffail_type;			/* Forced verification failure */
 } TLS_CLIENT_START_PROPS;
 
 extern TLS_APPL_STATE *tls_client_init(const TLS_CLIENT_INIT_PROPS *);
@@ -516,12 +531,13 @@ extern TLS_SESS_STATE *tls_client_post_connect(TLS_SESS_STATE *,
     a6, a7, a8, a9, a10, a11, a12, a13, a14))
 
 #define TLS_CLIENT_START(props, a1, a2, a3, a4, a5, a6, a7, a8, a9, \
-    a10, a11, a12, a13, a14, a15, a16, a17, a18) \
+    a10, a11, a12, a13, a14, a15, a16, a17, a18, a19, a20) \
     tls_client_start((((props)->a1), ((props)->a2), ((props)->a3), \
     ((props)->a4), ((props)->a5), ((props)->a6), ((props)->a7), \
     ((props)->a8), ((props)->a9), ((props)->a10), ((props)->a11), \
     ((props)->a12), ((props)->a13), ((props)->a14), ((props)->a15), \
-    ((props)->a16), ((props)->a17), ((props)->a18), (props)))
+    ((props)->a16), ((props)->a17), ((props)->a18), ((props)->a19), \
+    ((props)->a20), (props)))
 
  /*
   * tls_server.c
@@ -654,7 +670,7 @@ extern void tls_auto_groups(SSL_CTX *, const char *, const char *);
 extern char *tls_peer_CN(X509 *, const TLS_SESS_STATE *);
 extern char *tls_issuer_CN(X509 *, const TLS_SESS_STATE *);
 extern int tls_verify_certificate_callback(int, X509_STORE_CTX *);
-extern void tls_log_verify_error(TLS_SESS_STATE *);
+extern void tls_log_verify_error(TLS_SESS_STATE *, struct TLSRPT_WRAPPER *);
 
  /*
   * tls_dane.c

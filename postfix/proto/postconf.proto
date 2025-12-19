@@ -674,6 +674,10 @@ To avoid mailer loops, automatic BCC recipients are not generated
 after Postfix forwards mail internally, or after Postfix generates
 mail itself. </p>
 
+<p> Note: automatic BCC recipients are subject to address
+canonicalization (add missing domain), canonical_maps, masquerade_domains,
+and virtual_alias_maps. </p>
+
 %PARAM berkeley_db_create_buffer_size 16777216
 
 <p>
@@ -1194,7 +1198,8 @@ by an RFC 3463 enhanced status code. </dd>
 
 <dt><b>$rbl_domain</b></dt>
 
-<dd>The RBL domain where $rbl_what is denylisted. </dd>
+<dd>The RBL domain (without any <i>=address-filter</i>) where
+$rbl_what is denylisted. </dd>
 
 <dt><b>$rbl_reason</b></dt>
 
@@ -1254,7 +1259,7 @@ Instead of $name you can also specify ${name} or $(name).
 
 <p> Note: when an enhanced status code is specified in an RBL reply
 template, it is subject to modification.  The following transformations
-are needed when the same RBL reply template is used for client,
+are needed when the same RBL response template is used for client,
 helo, sender, or recipient access restrictions.  </p>
 
 <ul>
@@ -1979,15 +1984,20 @@ environment.  Examples of relevant environment variables: </p>
 
 <dd>Needed to make "<b>postfix -c</b>" work. </dd>
 
+<dt><b>POSTLOG_HOSTNAME</b></dt>
+
+<dd>Needed to make "<b>maillog_file</b>" work during daemon  
+process initialization. </dd>
+
 <dt><b>POSTLOG_SERVICE</b></dt>
 
 <dd>Needed to make "<b>maillog_file</b>" work during daemon 
 process initialization. </dd>
 
-<dt><b>POSTLOG_HOSTNAME</b></dt>
+<dt><b>XDG_RUNTIME_DIR</b></dt>
 
-<dd>Needed to make "<b>maillog_file</b>" work during daemon  
-process initialization. </dd>
+<dd>Needed for debugging Postfix daemons with an XDG-style debugger.
+</dd>
 
 </dl>
 
@@ -2297,20 +2307,6 @@ one-letter suffix that specifies the time unit).  Time units: s
 (seconds), m (minutes), h (hours), d (days), w (weeks).
 The default time unit is s (seconds).  </p>
 
-%PARAM lmtp_lhlo_timeout 300s
-
-<p> The Postfix LMTP client time limit for receiving the LMTP
-greeting banner.  When the remote LMTP server drops the connection
-without sending a
-greeting banner, or when it sends no greeting banner within the
-deadline, the LMTP client tries the next address on the mail
-exchanger list.  </p>
-
-<p> Specify a non-zero time value (an integral value plus an optional
-one-letter suffix that specifies the time unit).  Time units: s
-(seconds), m (minutes), h (hours), d (days), w (weeks).
-The default time unit is s (seconds).  </p>
-
 %PARAM lmtp_mail_timeout 300s
 
 <p>
@@ -2457,13 +2453,32 @@ into concurrency per domain.  </p>
 
 %PARAM local_recipient_maps proxy:unix:passwd.byname $alias_maps
 
-<p> Lookup tables with all names or addresses of local recipients:
-a recipient address is local when its domain matches $mydestination,
-$inet_interfaces or $proxy_interfaces.  Specify @domain as a
-wild-card for domains that do not have a valid recipient list.
+<p> Lookup tables with all names or addresses of valid local
+recipients. A recipient address is local when its domain matches
+$mydestination, $inet_interfaces or $proxy_interfaces. </p>
+
+<p> If the local_recipient_maps parameter value is non-empty (the
+default), then the Postfix SMTP server queries local_recipient_maps
+as specified in "<a href="LOCAL_RECIPIENT_README.html#format">Local
+recipient table query format</a>", and rejects mail for unknown
+local recipients. Other Postfix interfaces such as the Postfix
+sendmail(1) command may still accept an "unknown" recipient.  </p>
+
+<p> The default local_recipient_maps setting assumes that local_transport
+specifies the UNIX-compatible local(8) delivery agent which queries
+the UNIX passwd database (typically, /etc.passwd) and the local
+aliases database (typically, /etc/aliases). The proxy: agent allows
+the Postfix SMTP server to access the UNIX passwd database from
+outside a chroot jail. </p>
+
+<p> For other local mail delivery configurations, see <!-- filler
+--> "<a href="LOCAL_RECIPIENT_README.html#change">When you need to
+change the local_recipient_maps setting in main.cf</a>". </p>
+
+<p>
 Technically, tables listed with $local_recipient_maps are used as
-lists: Postfix needs to know only if a lookup string is found or
-not, but it does not use the result from table lookup.  </p>
+lists: The Postfix SMTP server needs to know only if a lookup string
+is found or not, but it does not use the result from table lookup. </p>
 
 <p>
 Specify zero or more "type:name" lookup tables, separated by
@@ -2472,41 +2487,8 @@ until a match is found.
 </p>
 
 <p>
-If this parameter is non-empty (the default), then the Postfix SMTP
-server will reject mail for unknown local users. Other Postfix
-interfaces may still accept an "unknown" recipient.  </p>
-
-<p>
 To turn off local recipient checking in the Postfix SMTP server,
 specify "local_recipient_maps =" (i.e. empty).
-</p>
-
-<p>
-The default setting assumes that you use the default Postfix local
-delivery agent for local delivery. You need to update the
-local_recipient_maps setting if:
-</p>
-
-<ul>
-
-<li>You redefine the local delivery agent in master.cf.
-
-<li>You redefine the "local_transport" setting in main.cf.
-
-<li>You use the "luser_relay", "mailbox_transport", or "fallback_transport"
-feature of the Postfix local(8) delivery agent.
-
-</ul>
-
-<p>
-Details are described in the LOCAL_RECIPIENT_README file.
-</p>
-
-<p>
-Beware: if the Postfix SMTP server runs chrooted, you need to access
-the passwd file via the proxymap(8) service, in order to overcome
-chroot access restrictions. The alternative, maintaining a copy of
-the system password file in the chroot jail is not practical.
 </p>
 
 <p>
@@ -3586,15 +3568,55 @@ The default time unit is s (seconds).  </p>
 %PARAM rbl_reply_maps 
 
 <p>
-Optional lookup tables with RBL response templates. The tables are
-indexed by the RBL domain name. By default, Postfix uses the default
+Optional lookup tables with RBL or RHSBL response templates. The
+table search key is the reject_rbl_* or reject_rhsbl_* argument,
+including any optional "<i>=address-filter</i>".  With Postfix 3.10
+and later, if the result is "not found" and the search key has the
+form <i>domain=address-filter</i>, then rbl_reply_maps will also
+search with the <i>domain</i>. </p>
+
+<p> By default, Postfix uses the
 template as specified with the default_rbl_reply configuration
-parameter. See there for a discussion of the syntax of RBL reply
-templates.
+parameter. See there for a discussion of the response template
+syntax.
+</p>
+
+<p> Example: </p>
+
+<pre>
+/etc/postfix/main.cf:
+    rbl_reply_maps = hash:/etc/postfix/rbl_reply
+    smtpd_recipient_restrictions =
+        permit_mynetworks, 
+        reject_rbl_client <i>secret</i>.zen.dq.spamhaus.net=127.0.0.[2..11],
+	...
+<br>
+/etc/postfix/rbl_reply:
+    # See https://www.postfix.org/postconf.5.html#default_rbl_reply
+    # for the definition of the $client_address and $rbl_class etc.
+    # variables.
+    <i>secret</i>.zen.dq.spamhaus.net=127.0.0.[2..11]
+        554 $rbl_class $rbl_what blocked using ZEN - see https://www.spamhaus.org/query/ip/$client_address for details
+</pre>
+
+<pre>
+    # Postfix &ge; 3.10: if a search key <i>domain=address-filter</i>
+    # is not found, then rbl_reply_maps will also search with the
+    # <i>domain</i>.
+    <i>secret</i>.zen.dq.spamhaus.net
+        554 $rbl_class $rbl_what blocked using ZEN - see https://www.spamhaus.org/query/ip/$client_address for details 
+</pre>
+
+<p>
+NOTE: This feature differs from postscreen_dnsbl_reply_map where
+the table search key is only a domain name (no "<i>=address-filter</i>",
+no "<i>*weight</i>" factor) and where the lookup result
+should be only a domain name (no free text, no <i>$name</i> variables).
 </p>
 
 <p>
 This feature is available in Postfix 2.0 and later.
+The "=address-filter" feature is available in Postfix 2.8 and later.
 </p>
 
 %PARAM receive_override_options 
@@ -3710,6 +3732,10 @@ be notified when the BCC address is undeliverable.
 To avoid mailer loops, automatic BCC recipients are not generated
 after Postfix forwards mail internally, or after Postfix generates
 mail itself. </p>
+
+<p> Note: automatic BCC recipients are subject to address
+canonicalization (add missing domain), canonical_maps, masquerade_domains,
+and virtual_alias_maps. </p>
 
 <p>
 Example:
@@ -3991,6 +4017,26 @@ relocated_maps = dbm:/etc/postfix/relocated
 relocated_maps = hash:/etc/postfix/relocated
 </pre>
 
+%PARAM relocated_prefix_enable  yes
+
+<p> Prepend the prefix "<b>5.1.6 User has moved to </b>" to all
+relocated_maps lookup results. With "relocated_prefix_enable =
+no", all lookup results must contain a valid RFC 3463 compliant
+enhanced status code and text (format: "[45].number.number text...").
+
+<p>
+Example:
+</p>
+
+<pre>
+/etc/postfix/main.cf:
+    relocated_maps = hash:/etc/postfix/relocated
+    relocated_prefix_enable = no
+<br>
+hash:/etc/postfix/relocated:
+    user@example.com 5.2.1 User account is disabled
+</pre>
+
 %PARAM require_home_directory no
 
 <p>
@@ -4082,6 +4128,10 @@ when the BCC address is undeliverable.
 To avoid mailer loops, automatic BCC recipients are not generated
 after Postfix forwards mail internally, or after Postfix generates
 mail itself. </p>
+
+<p> Note: automatic BCC recipients are subject to address
+canonicalization (add missing domain), canonical_maps, masquerade_domains,
+and virtual_alias_maps. </p>
 
 <p>
 Example:
@@ -5054,6 +5104,10 @@ not be used to regulate legitimate mail traffic.
 This feature is available in Postfix 2.2 and later.
 </p>
 
+%PARAM smtpd_client_connection_limit_exceptions $mynetworks
+
+<p> Renamed to smtpd_client_event_limit_exceptions in Postfix 2.2. </p>
+
 %PARAM smtpd_client_event_limit_exceptions $mynetworks
 
 <p>
@@ -5446,7 +5500,12 @@ The maps_rbl_reject_code parameter specifies the response code for
 rejected requests (default:  554), the default_rbl_reply  parameter
 specifies the default server reply, and the rbl_reply_maps  parameter
 specifies tables with server replies indexed by <i>rbl_domain</i>.
-This feature is available in Postfix 2.0 and later.  </dd>
+<br>
+NOTE: Always respect the usage policies of reputation services. Avoid 
+public or ISP resolvers, unless the queries use your unique API key
+(see rbl_reply_maps for how to avoid leaking the key in SMTP server
+responses). <br>
+This feature is available in Postfix 2.0 and later. </dd>
 
 <dt><b><a name="permit_dnswl_client">permit_dnswl_client <i>dnswl_domain=d.d.d.d</i></a></b></dt>
 
@@ -5458,8 +5517,12 @@ If no "<i>=d.d.d.d</i>" is specified, accept the request when the
 reversed client network address is listed with any A record under
 <i>dnswl_domain</i>. <br> For safety, permit_dnswl_client is silently
 ignored when it would override reject_unauth_destination.  The
-result is DEFER_IF_REJECT when allowlist lookup fails.  This feature
-is available in Postfix 2.8 and later.  </dd>
+result is DEFER_IF_REJECT when allowlist lookup fails. <br>
+NOTE: Always respect the usage policies of reputation services. Avoid
+public or ISP resolvers, unless the queries use your unique API key
+(see rbl_reply_maps for how to avoid leaking an API key in SMTP 
+server responses). <br>
+This feature is available in Postfix 2.8 and later. </dd>
 
 <dt><b><a name="reject_rhsbl_client">reject_rhsbl_client <i>rbl_domain=d.d.d.d</i></a></b></dt>
 
@@ -5472,9 +5535,14 @@ number..number ranges (Postfix version 2.8 and later).  If no
 hostname is listed with
 any A record under <i>rbl_domain</i>. See the reject_rbl_client
 description above for additional RBL related configuration parameters.
+<br>
+NOTE: Always respect the usage policies of reputation services. Avoid 
+public or ISP resolvers, unless the queries use your unique API key
+(see rbl_reply_maps for how to avoid leaking an API key in SMTP 
+server responses). <br>
 This feature is available in Postfix 2.0 and later; with Postfix
 version 2.8 and later, reject_rhsbl_reverse_client will usually
-produce better results.  </dd>
+produce better results. </dd>
 
 <dt><b><a name="permit_rhswl_client">permit_rhswl_client <i>rhswl_domain=d.d.d.d</i></a></b></dt>
 
@@ -5490,8 +5558,12 @@ allowlisting should be used only to reduce false positives in e.g.
 DNS-based blocklists, and not for making access rule exceptions.
 <br> For safety, permit_rhswl_client is silently ignored when it
 would override reject_unauth_destination.  The result is DEFER_IF_REJECT
-when allowlist lookup fails.  This feature is available in Postfix
-2.8 and later.  </dd>
+when allowlist lookup fails. <br>
+NOTE: Always respect the usage policies of reputation services. Avoid 
+public or ISP resolvers, unless the queries use your unique API key
+(see rbl_reply_maps for how to avoid leaking an API key in SMTP 
+server responses). <br>
+This feature is available in Postfix 2.8 and later.</dd>
 
 <dt><b><a name="reject_rhsbl_reverse_client">reject_rhsbl_reverse_client <i>rbl_domain=d.d.d.d</i></a></b></dt>
 
@@ -5502,8 +5574,12 @@ one or more ";"-separated numbers or number..number ranges.
 If no "<i>=d.d.d.d</i>" is specified, reject the request when the
 unverified reverse client hostname is listed with any A record under
 <i>rbl_domain</i>. See the reject_rbl_client description above for
-additional RBL related configuration parameters.  This feature is
-available in Postfix 2.8 and later.  </dd>
+additional RBL related configuration parameters. <br>
+NOTE: Always respect the usage policies of reputation services. Avoid 
+public or ISP resolvers, unless the queries use your unique API key
+(see rbl_reply_maps for how to avoid leaking an API key in SMTP 
+server responses). <br>
+This feature is available in Postfix 2.8 and later. </dd>
 
 <dt><b><a name="reject_unknown_client_hostname">reject_unknown_client_hostname</a></b> (with Postfix &lt; 2.3: reject_unknown_client)</dt>
 
@@ -6009,8 +6085,12 @@ reject_rbl_client description for additional RBL related configuration
 parameters.  Note: specify "smtpd_helo_required = yes" to fully
 enforce this restriction (without "smtpd_helo_required = yes", a
 client can simply skip reject_rhsbl_helo by not sending HELO or
-EHLO). This feature is available in Postfix 2.0
-and later.  </dd>
+EHLO). <br>
+NOTE: Always respect the usage policies of reputation services. Avoid 
+public or ISP resolvers, unless the queries use your unique API key
+(see rbl_reply_maps for how to avoid leaking an API key in SMTP 
+server responses). <br>
+This feature is available in Postfix 2.0 and later. </dd>
 
 <dt><b><a name="reject_unknown_helo_hostname">reject_unknown_helo_hostname</a></b> (with Postfix &lt; 2.3: reject_unknown_hostname)</dt>
 
@@ -6318,8 +6398,12 @@ any A record under <i>rbl_domain</i>. <br> The maps_rbl_reject_code
 parameter specifies the response code for rejected requests (default:
 554); the default_rbl_reply parameter specifies the default server
 reply; and the rbl_reply_maps parameter specifies tables with server
-replies indexed by <i>rbl_domain</i>.  This feature is available
-in Postfix version 2.0 and later.</dd>
+replies indexed by <i>rbl_domain</i>. <br>
+NOTE: Always respect the usage policies of reputation services. Avoid 
+public or ISP resolvers, unless the queries use your unique API key
+(see rbl_reply_maps for how to avoid leaking an API key in SMTP 
+server responses). <br>
+This feature is available in Postfix version 2.0 and later.</dd>
 
 <dt><b><a name="reject_unauth_destination">reject_unauth_destination</a></b></dt>
 
@@ -6676,9 +6760,17 @@ smtpd_sasl_security_options = noanonymous, noplaintext
 %PARAM smtpd_sender_login_maps 
 
 <p>
-Optional lookup table with the SASL login names that own the sender
+Optional lookup table with the SASL login names that own the 
+envelope sender
 (MAIL FROM) addresses.
 </p>
+
+<blockquote> <p> Note: to enforce that the From: header address
+matches the envelope sender (MAIL FROM) address, use an external
+filter such as a Milter, for the submission or submissions (formerly
+called smtps )
+services. For example: https://github.com/magcks/milterfrom. </p>
+</blockquote>
 
 <p>
 Specify zero or more "type:name" lookup tables, separated by
@@ -6777,6 +6869,11 @@ or the SASL login name is not an owner for that address.
 <br>
 This prevents an authenticated client from using a MAIL FROM address
 that they do not explicitly own.
+<br> 
+Note: to enforce that the From: header address matches the envelope
+sender (MAIL FROM) address, use an external filter such as a Milter,
+for the submission or submissions (formerly called smtps) services.
+For example: https://github.com/magcks/milterfrom.
 <br>
 This feature is available in Postfix version 2.1 and later. </dd>
 
@@ -6793,6 +6890,11 @@ $smtpd_sender_login_maps.
 This protects any MAIL FROM address that is listed in
 $smtpd_sender_login_maps, while still allowing a client to use any
 unlisted MAIL FROM address.
+<br> 
+Note: to enforce that the From: header address matches the envelope
+sender (MAIL FROM) address, use an external filter such as a Milter,
+for the submission or submissions (formerly called smtps) services.
+For example: https://github.com/magcks/milterfrom.
 <br>
 This feature is available in Postfix version 2.11 and later.</dd>
 
@@ -6818,6 +6920,11 @@ maps_rbl_reject_code parameter specifies the response code for
 rejected requests (default:  554); the default_rbl_reply parameter
 specifies the default server reply; and the rbl_reply_maps parameter
 specifies tables with server replies indexed by <i>rbl_domain</i>.
+<br>
+NOTE: Always respect the usage policies of reputation services. Avoid 
+public or ISP resolvers, unless the queries use your unique API key
+(see rbl_reply_maps for how to avoid leaking an API key in SMTP 
+server responses). <br>
 This feature is available in Postfix 2.0 and later.</dd>
 
 <dt><b><a name="reject_sender_login_mismatch">reject_sender_login_mismatch</a></b></dt>
@@ -6834,6 +6941,11 @@ authenticated with SASL.
 <br>
 With SASL enabled, this prevents an unauthenticated client from
 using any MAIL FROM address that is listed in $smtpd_sender_login_maps.
+<br> 
+Note: to enforce that the From: header address matches the envelope
+sender (MAIL FROM) address, use an external filter such as a Milter,
+for the submission or submissions (formerly called smtps) services.
+For example: https://github.com/magcks/milterfrom.
 <br>
 This feature is available in Postfix version 2.1 and later.</dd>
 
@@ -8419,11 +8531,11 @@ use the same program name. </p>
 <p> Example master.cf entries: </p>
 
 <pre>
-# Distinguish inbound MTA logging from submission and smtps logging.
+# Distinguish inbound MTA logging from submission and submissions logging.
 smtp      inet  n       -       n       -       -       smtpd
 submission inet n       -       n       -       -       smtpd
     -o syslog_name=postfix/$service_name
-smtps     inet  n       -       n       -       -       smtpd
+submissions inet n      -       n       -       -       smtpd
     -o syslog_name=postfix/$service_name
 </pre>
 
@@ -9856,9 +9968,13 @@ Postfix 2.3 and later use smtpd_tls_security_level instead. </p>
 %PARAM smtpd_enforce_tls no
 
 <p> Mandatory TLS: announce STARTTLS support to remote SMTP clients,
-and require that clients use TLS encryption.  According to RFC 2487
+and reject all plaintext commands except HELO, EHLO, XCLIENT,
+STARTTLS, NOOP, QUIT, and (Postfix &ge; 3.9) HELP.
+According to RFC 2487
 this MUST NOT be applied in case of a publicly-referenced SMTP
-server.  This option is therefore off by default. </p>
+server. Instead, this should be used on dedicated servers, for
+example submission (port 587). This option is therefore off by
+default. </p>
 
 <p> Note 1: "smtpd_enforce_tls = yes" implies "smtpd_tls_auth_only = yes". </p>
 
@@ -9879,8 +9995,8 @@ instead of using the STARTTLS command. </p>
 
 <p> If you want to support this service, enable a special port in
 master.cf, and specify "-o smtpd_tls_wrappermode=yes" on the SMTP
-server's command line. Port 465 (submissions/smtps) is reserved for
-this purpose. </p>
+server's command line. Port 465 (submissions, formerly called smtps)
+is reserved for this purpose. </p>
 
 <p> This feature is available in Postfix 2.2 and later.  </p>
 
@@ -10783,24 +10899,42 @@ DNS lookup and increases the maximal inbound delivery rate. </p>
 %PARAM delay_logging_resolution_limit 2
 
 <p> The maximal number of digits after the decimal point when logging
-sub-second delay values.  Specify a number in the range 0..6.  </p>
+delay values. Specify a number in the range 0..6. </p>
 
-<p> Large delay values are rounded off to an integral number of seconds;
-delay values below the delay_logging_resolution_limit are logged
-as "0", and delay values under 100s are logged with at most two-digit
-precision.  </p>
+<p> To improve readability, delays are logged with only a limited
+number of significant digits: </p>
+
+<ul>
+
+<li> Delays &ge; 100s are rounded off to an integral number of
+seconds.
+
+<li> Delays &lt; 10<sup>-$delay_logging_resolution_limit</sup> are
+rounded off to "0".
+
+<li> Other delays are rounded off to two significant digits, or
+fewer if the result would exceed the delay_logging_resolution_limit.
+
+</ul>
 
 <p> The format of the "delays=a/b/c/d" logging is as follows: </p>
 
 <ul>
 
-<li> a = time from message arrival to last active queue entry
+<li> a = Time from message arrival to last active queue entry.
 
-<li> b = time from last active queue entry to connection setup
+<li> b = Time from last active queue entry to the beginning of
+connection setup.
 
-<li> c = time in connection setup, including DNS, EHLO and STARTTLS
+<li> c = Time in connection setup. With SMTP, that is the time
+before sending the MAIL FROM command: with a new connection, that
+includes DNS lookups, and protocol handshakes with TCP, EHLO, and
+STARTTLS; with a reused connection, that includes DNS lookups,
+connection cache lookup by domain or IP address, and a liveness
+probe with RSET.
 
-<li> d = time in message transmission
+<li> d = Time in message transmission. With SMTP, that starts with 
+sending MAIL FROM.
 
 </ul>
 
@@ -11237,6 +11371,10 @@ currently used only to locate the $smtpd_sasl_path.conf file.
 Specify zero or more directories separated by a colon character,
 or an empty value to use Cyrus SASL's built-in search path.  </p>
 
+<p> Note: some Debian-based Postfix distributions ignore the
+"cyrus_sasl_config_path" parameter setting, and force Postfix to
+open the file <code>/etc/postfix/sasl/smtpd.conf</code>. </p>
+
 <p> This feature is available in Postfix 2.5 and later when compiled
 with Cyrus SASL 2.1.22 or later. </p>
 
@@ -11324,11 +11462,8 @@ false hostname information in DNS CNAME records, and makes SASL
 password file lookups more predictable. This is the default setting
 as of Postfix 2.3. </p>
 
-<p> When DNS CNAME records are validated with secure DNS lookups
-(smtp_dns_support_level = dnssec), they are always allowed to
-override the above servername (Postfix 2.11 and later). </p>
-
-<p> This feature is available in Postfix 2.2.9 and later. </p>
+<p> This feature is available in Postfix 2.2.9 and later, deprecated
+as of Postfix 3.11. </p>
 
 %PARAM lmtp_cname_overrides_servername yes
 
@@ -11386,7 +11521,7 @@ command. </p>
 the use of
 disk, CPU and memory resources. The downside is that rejected
 recipients are logged with NOQUEUE instead of a mail transaction
-ID. This complicates the logfile analysis of multi-recipient mail.
+ID (also known as a queue ID).
 </p>
 
 <p> This feature is available in Postfix 2.3 and later. </p>
@@ -11459,8 +11594,9 @@ configuration parameter.  See there for details. </p>
 <p> Optional lookup tables with the Postfix SMTP client TLS security
 policy by next-hop destination; when a non-empty value is specified,
 this overrides the obsolete smtp_tls_per_site parameter.  See
-TLS_README for a more detailed discussion of TLS security levels.
-</p>
+TLS_README for a more detailed discussion of TLS security levels,
+and see TLSRPT_README for additional configuration that may be
+needed for MTA-STS plugins. </p>
 
 <p>
 Specify zero or more "type:name" lookup tables, separated by
@@ -11984,14 +12120,16 @@ smtpd_tls_mandatory_protocols = !SSLv2, !SSLv3, !TLSv1, !TLSv1.1
 
 <p> This feature is available in Postfix 2.3 and later. </p>
 
-%PARAM smtp_tls_security_level
+%PARAM smtp_tls_security_level Postfix &ge; 3.11: may; Postfix &lt; 3.11: empty
 
 <p> The default SMTP TLS security level for the Postfix SMTP client.
 When a non-empty value is specified, this overrides the obsolete
 parameters smtp_use_tls, smtp_enforce_tls, and smtp_tls_enforce_peername;
-when no value is specified for smtp_tls_enforce_peername or the obsolete
-parameters, the default SMTP TLS security level is
-<a href="TLS_README.html#client_tls_none">none</a>. </p>
+when no value is specified for those obsolete parameters, the default
+SMTP TLS security level is <a href="TLS_README.html#client_tls_may">may</a>
+(compatibility_level &ge; 3.11) or <a
+href="TLS_README.html#client_tls_none">none</a> 
+(compatibility_level &lt; 3.11). </p>
 
 <p> Specify one of the following security levels: </p>
 
@@ -12203,7 +12341,7 @@ will not reply for each individual message header.</dd>
 
 <p> This feature is available in Postfix 2.3 and later. </p>
 
-%PARAM milter_default_action tempfail
+%PARAM milter_default_action Postfix &ge; 3.11: shutdown; Postfix &lt; 3.11: tempfail
 
 <p> The default action when a Milter (mail filter) response is
 unavailable (for example, bad Postfix configuration or Milter
@@ -12220,10 +12358,21 @@ with a permanent status code.</dd>
 <dt>tempfail</dt> <dd>Reject all further commands in this session
 with a temporary status code. </dd>
 
+<dt>shutdown</dt> <dd>Close the SMTP connection after sending a 421 
+SMTP reply. Available in Postfix 3.11 and later. </dd>
+
 <dt>quarantine</dt> <dd>Like "accept", but freeze the message in
 the "hold" queue. Available with Postfix 2.6 and later. </dd>
 
 </dl>
+
+<p> The default action was "tempfail" with Postfix 3.10 and earlier.
+</p>
+
+<p> The default action is "shutdown" with Postfix 3.11 and later,
+i.e. disconnect the SMTP client. With the old default, Postfix could
+tempfail all messages that the client sends over a long-lived
+connection, even if a Milter failure is only temporary. </p>
 
 <p> This feature is available in Postfix 2.3 and later. </p>
 
@@ -12683,10 +12832,11 @@ to remote SMTP clients, but do not require that clients use TLS encryption.
 </dd>
 
 <dt><b>encrypt</b></dt> <dd>Mandatory TLS encryption: announce
-STARTTLS support to remote SMTP clients, and require that clients use TLS
-encryption. According to RFC 2487 this MUST NOT be applied in case
-of a publicly-referenced SMTP server. Instead, this option should
-be used only on dedicated servers. </dd>
+STARTTLS support to remote SMTP clients, and reject all plaintext
+commands except HELO, EHLO, XCLIENT, STARTTLS, NOOP, QUIT, and (Postfix
+&ge; 3.9) HELP. According to RFC 2487 this MUST NOT be applied in case
+of a publicly-referenced SMTP server. Instead, this should be used
+on dedicated servers, for example submission (port 587). </dd>
 
 </dl>
 
@@ -13273,26 +13423,47 @@ parameter. See there for details. </p>
 
 %PARAM tls_eecdh_auto_curves see "postconf -d" output
 
-<p> The prioritized list of elliptic curves supported by the Postfix
-SMTP client and server.  These curves are used by the Postfix SMTP
-server when "smtpd_tls_eecdh_grade = auto".  The selected curves must be
-implemented by OpenSSL and be standardized for use in TLS (RFC 8422).
-It is unwise to list only "bleeding-edge" curves supported by a small
-subset of clients.  The default list is suitable for most users. </p>
+<p> The prioritized list of elliptic curves, that should be enabled in the
+Postfix SMTP client and server.  The selected curves should be implemented
+by OpenSSL and be standardized for use in the TLS "supported groups" extension
+(RFC8422, RFC8446 and RFC8447).  Be sure to include at least "x25519" and
+"prime256v1" (the OpenSSL name for "secp256r1", a.k.a. "P-256").  The default
+list is suitable for most users. </p>
 
-<p> Postfix skips curve names that are unknown to OpenSSL, or that
-are known but not yet implemented.  This makes it possible to
-"anticipate" support for curves that should be used once they become
-available.  In particular, in some OpenSSL versions, the new RFC
-8031 curves "X25519" and "X448" may be known by name, but ECDH
-support for either or both may be missing.  These curves may appear
-in the default value of this parameter, even though they'll only
-be usable with later versions of OpenSSL.  </p>
+<p> On the client side, the first curve listed will be used to construct the
+client's initial TLS 1.3 "keyshare".  If this is not supported by the server,
+the TLS handshake may require an additional round-trip after the server issues
+a HelloRetryRequest (HRR) indicating a suitable mutually supported curve. </p>
+
+<p> Postfix skips curve names that are unknown to OpenSSL, or that are known
+but not yet implemented.  This makes it possible to "anticipate" support for
+curves that should be used once they become available, or to deploy the same
+setting on a server "farm" where not all servers support the same curves.  </p>
+
+<p> As of Postfix 3.10, when compiled with OpenSSL 3.0 or later, the "curve"
+names can be more general key encapsulation mechanisms (KEMs), and/or may be
+loaded from an external "provider" (via a suitable tls_config_file).  </p>
 
 <p> See also the "tls_ffdhe_auto_groups" parameter, which supports
 customizing the list of FFDHE groups enabled with TLS 1.3.  That setting
 is introduced with Postfix 3.8, when built against OpenSSL 3.0 or later.
 </p>
+
+<p> Post-quantum cryptography support: OpenSSL 3.5 introduces new
+configuration syntax that Postfix will not attempt to emulate.  That
+said, when compiled against OpenSSL 3.5 or later, the Postfix default
+setting is a minor adjustment of the OpenSSL compiled-in default
+setting, it just delays generation of the hybrid post-quantum
+<b>X25519MLKEM768</b> key-share until it is explicitly requested by the
+server.  This avoids interoperability issues with some SMTP servers that
+are unable to handle the resulting large TLS Client Hello. </p>
+
+<p> If, despite the strongly recommended defaults, you need fine-grained
+control over the supported groups, with Postfix 3.6.17, 3.7.13, 3.8.8,
+3.9.2, and later, set both tls_eecdh_auto_curves and if available
+tls_ffdhe_auto_groups to the empty value, to enable algorithm selection
+through OpenSSL configuration.  See tls_config_file for a configuration
+example.  </p>
 
 <p> This feature is available in Postfix 3.2 and later, when it is
 compiled and linked with OpenSSL 1.0.2 or later on platforms where
@@ -13318,21 +13489,24 @@ are largely a backup, in case some peer does not support EC key
 exchange, or EC key exchange needs to be disabled for some pressing
 reason. </p>
 
-<p> Setting this parameter empty disables FFDHE support in TLS 1.3.
+<p> Setting this parameter empty disables FFDHE support in TLS 1.3,
+unless FFDHE groups are included in the "tls_eecdh_auto_curves" setting,
+perhaps indirectly, as with the "DEFAULT" keyword available with OpenSSL
+3.5 or later.  In that case, prefixing each group name with a "-" has
+the effect of removing it from the list.
 Whether FFDHE key agreement is enabled in TLS 1.2 and earlier depends
 on whether any of the "kDHE" ciphers are included in the cipherlist.
 </p>
 
 <p> Conversely, setting "tls_eecdh_auto_curves" empty disables TLS 1.3
-EC key agreement in OpenSSL 3.0 and later.  Note that at least one of
-"tls_eecdh_auto_curves" and "tls_ffdhe_auto_groups" must be non-empty,
-this is required by OpenSSL 3.0.  If both are inadvertently set empty,
-Postfix will fall back to the compiled-in defaults. </p>
+EC key agreement in OpenSSL 3.0 and later. If both are set empty,
+Postfix will fall back to OpenSSL preferences as described in the
+documentation of "tls_eecdh_auto_curves".
 
-<p> All the default groups and EC curves should sufficiently strong
-to make "pruning" the defaults unwise.  At a minimum, "X25519" and
-"P-256" (a.k.a. "prime256v1") should be among the enabled EC curves,
-while "dhe2048" and "dhe3072" should be among the FFDHE groups. </p>
+<p> The default list includes "ffdhe2048" and "ffdhe3072".  While
+it should not be necessary in most cases, you can add "ffdhe4096"
+to the list if you run into an exotic server that does not support
+ECDHE and insists on much stronger than sensible DHE parameters.  </p>
 
 <p> This feature is available in Postfix 3.8 and later, when it is
 compiled and linked with OpenSSL 3.0 or later. </p>
@@ -13351,6 +13525,8 @@ generally change this setting.  Remote SMTP client implementations
 must support this curve for EECDH key exchange to take place.  It
 is unwise to choose only "bleeding-edge" curves supported by only a
 small subset of clients.  </p>
+
+<p> This feature is not used as of Postfix 3.6. Do not specify. </p>
 
 <p> The default "strong" curve is rated in NSA <a
 href="https://web.archive.org/web/20160330034144/https://www.nsa.gov/ia/programs/suiteb_cryptography/">Suite
@@ -13392,6 +13568,8 @@ client implementations must support this curve for EECDH key exchange
 to take place.  It is unwise to choose only "bleeding-edge" curves
 supported by only a small subset of clients. </p>
 
+<p> This feature is not used as of Postfix 3.6. Do not specify. </p>
+
 <p> This default "ultra" curve is rated in NSA <a
 href="https://web.archive.org/web/20160330034144/https://www.nsa.gov/ia/programs/suiteb_cryptography/">Suite
 B</a> for information classified up to TOP SECRET. </p>
@@ -13417,6 +13595,8 @@ Diffie-Hellman (EECDH) key exchange.   As of Postfix 3.6, the value of
 this parameter is always ignored, and Postfix behaves as though the
 <b>auto</b> value (described below) was chosen.
 </p>
+
+<p> This feature is not used as of Postfix 3.6. Do not specify. </p>
 
 <p> The available choices are: </p>
 
@@ -14599,6 +14779,10 @@ clients,
 and postscreen(8) will update an SMTP client's DNSBL score with
 each non-error reply as described below. </p>
 
+<p> NOTE: Always respect the usage policies of reputation services.
+Avoid public or ISP resolvers, unless the queries use your unique
+API key. </p>
+
 <p> Caution: when postscreen rejects mail, its SMTP response contains
 the DNSBL
 domain name. Use the postscreen_dnsbl_reply_map feature to hide
@@ -14937,6 +15121,12 @@ line. </p>
 
 <pre>
 /etc/postfix/reply_filter:
+    # Some Microsoft servers violate RFC 2554 section 4, causing Postfix
+    # to complain with "non-empty initial GSSAPI challenge from server"
+    /^334\s+GSSAPI\s+supported/ 334
+</pre>
+
+<pre>
     # Transform garbage into "250-filler..." so that it looks like
     # one line from a multi-line reply. It does not matter what we
     # substitute here as long it has the right syntax.  The Postfix
@@ -15405,6 +15595,11 @@ the file is read). </p>
 /etc/postfix/dnsbl_reply:
    secret.zen.spamhaus.org	zen.spamhaus.org
 </pre>
+
+<p> NOTE: This feature differs from the Postfix SMTP server's
+rbl_reply_maps feature, where 1) the table search key includes the
+optional "<i>=address-filter</i>", and where 2) the lookup result
+contains free text with <i>$name</i> variables. </p>
 
 <p> This feature is available in Postfix 2.8.  </p>
 
@@ -15893,7 +16088,7 @@ the "tlsproxy_tls_chain_files" parameter. </p>
 elliptic-curve Diffie-Hellman (EECDH) key exchange. See
 smtpd_tls_eecdh_grade for further details. </p>
 
-<p> This feature is deprecated as of Postfix 3.9. Do not specify. </p>
+<p> This feature is not used as of Postfix 3.6. Do not specify. </p>
 
 <p> This feature is available in Postfix 2.8 and later. </p>
 
@@ -15991,7 +16186,7 @@ cache information. Since the cache is shared with smtpd(8) and managed
 by tlsmgr(8), there is only one expiration time for the SMTP server cache
 shared by all three services, namely smtpd_tls_session_cache_timeout. </p>
 
-<p> This feature is available in Postfix 2.8 and later. </p>
+<p> This feature is available in Postfix 2.8-2.10. </p>
 
 %PARAM tlsproxy_use_tls $smtpd_use_tls
 
@@ -16945,10 +17140,13 @@ later. </p>
 
 %PARAM default_delivery_status_filter
 
-<p> Optional filter to replace the delivery status code or explanatory
-text of successful or unsuccessful deliveries.  This does not allow
+<p> Optional filter in Postfix delivery agents, to replace the
+delivery status code or explanatory text of successful or unsuccessful
+deliveries. This allows the replacement of a temporary error status
+code (4.X.X) with a permanent error status code (5.X.X) or vice
+versa, but does not allow
 the replacement of a successful status code (2.X.X) with an
-unsuccessful status code (4.X.X or 5.X.X) or vice versa.  </p>
+unsuccessful status code (4.X.X or 5.X.X) or vice versa. </p>
 
 <p> Note: the (smtp|lmtp)_delivery_status_filter is applied only
 once per recipient: when delivery is successful, when delivery is
@@ -17418,21 +17616,22 @@ with valid PTR etc. records. </p>
 %PARAM smtp_tls_wrappermode no
 
 <p> Request that the Postfix SMTP client connects using the
-SUBMISSIONS/SMTPS protocol instead of using the STARTTLS command. </p>
+SUBMISSIONS (formerly called SMTPS) protocol instead of using the
+STARTTLS command. </p>
 
 <p> This mode requires "smtp_tls_security_level = encrypt" or
 stronger. </p>
 
-<p> Example: deliver all remote mail via a provider's server
-"mail.example.com".  </p>
+<p> Example: deliver all remote mail via a provider's submissions
+service at "mail.example.com".  </p>
 
 <pre>
 /etc/postfix/main.cf:
-    # Client-side SMTPS requires "encrypt" or stronger.
+    # Client-side SUBMISSIONS requires "encrypt" or stronger.
     smtp_tls_security_level = encrypt
     smtp_tls_wrappermode = yes
     # The [] suppress MX lookups.
-    relayhost = [mail.example.com]:465
+    relayhost = [mail.example.com]:submissions
 </pre>
 
 <p> More examples are in TLS_README, including examples for older
@@ -17502,7 +17701,7 @@ clients).  </p>
 This feature is available in Postfix 3.1 and later.
 </p>
 
-%PARAM smtp_tls_dane_insecure_mx_policy see "postconf -d" output
+%PARAM smtp_tls_dane_insecure_mx_policy dane
 
 <p> The TLS policy for MX hosts with "secure" TLSA records when the
 nexthop destination security level is <b>dane</b>, but the MX
@@ -17526,10 +17725,9 @@ authentication succeeds, it will be logged only as "Trusted", not
 "Verified", because the MX host name could have been forged.  </dd>
 </dl>
 
-<p> The default setting for Postfix &ge; 3.6 is "dane" with
-"smtp_tls_security_level = dane", otherwise "may". This behavior
-was backported to Postfix versions 3.5.9, 3.4.19, 3.3.16. 3.2.21.
-With earlier Postfix versions the default setting was always "dane".
+<p> The default setting is "dane" as of Postfix versions 3.6.17,
+3.7.13, 3.8.8, 3.9.2, and 3.10.0. With earlier versions the default
+was mistakenly dependent on the smtp_tls_security_level setting.
 </p>
 
 <p> Though with "insecure" MX records an active attacker can
@@ -17618,8 +17816,8 @@ Milter support should be disabled. </p>
 when converting UTF-8 domain names to/from the ASCII form that is
 used for DNS lookups. Specify "yes" for compatibility with Postfix
 &le; 3.1 (not recommended). This affects the conversion of domain
-names that contain for example the German sz and the Greek zeta.
-See http://unicode.org/cldr/utility/idna.jsp for more examples.
+names that contain for example the German sz and the Greek sigma.
+See https://unicode.org/cldr/utility/idna.jsp for more examples.
 </p>
 
 <p> This feature is available in Postfix 3.2 and later.  </p>
@@ -18528,6 +18726,11 @@ prepend "<b>uid:</b>" to the numerical UID and use that instead. </p>
 <p> This feature ignores address extensions in the user-specified
 envelope sender address. </p>
 
+<p> Note: to enforce that the From: header address matches the envelope
+sender (MAIL FROM) address, specify an external filter such as a Milter,
+with the non_smtpd_milters parameter. For example:
+https://github.com/magcks/milterfrom. </p>
+
 <p> The following sender patterns are special; these cannot be used
 as part of a longer pattern. </p>
 
@@ -18891,8 +19094,8 @@ process. </p>
 
 <p> Specify zero or more service names separated by comma and/or
 whitespace. Any name in the services(5) database may be specified,
-though in practice only submission, submissions, and smtp make
-sense.  </p>
+though in practice only submission or submissions (formerly called
+smtp) make sense.  </p>
 
 <p> When SRV record lookup is enabled with use_srv_lookup, you can
 enclose a domain name in "[]" to force IP address lookup instead
@@ -19099,6 +19302,50 @@ MinProtocol = TLSv1
 </pre>
 </blockquote>
 
+<p> Example: Custom OpenSSL group settings. </p>
+
+<pre>
+main.cf:
+    tls_config_file = ${config_directory}/openssl.cnf
+    tls_config_name = postfix
+    # Clear Postfix curve/group settings to let custom OpenSSL
+    # configuration settings take effect.  For most users, the
+    # default Postfix settings are strongly recommended.
+    tls_eecdh_auto_curves =
+    tls_ffdhe_auto_groups =
+</pre>
+
+<pre>
+openssl.cnf:
+    postfix = postfix_settings
+</pre>
+
+<pre>
+    [postfix_settings]
+    ssl_conf = postfix_ssl_settings
+</pre>
+
+<pre>
+    [postfix_ssl_settings]
+    system_default = baseline_postfix_settings
+</pre>
+
+<pre>
+    [baseline_postfix_settings]
+    # New OpenSSL 3.5 syntax, for older releases consider
+    # the Postfix default:
+    #
+    # Groups = X25519:X448:prime256v1:secp384r1:secp521r1:ffdhe2048:ffdhe3072
+    #
+    Groups = ?X25519MLKEM768 / ?*X25519:?secp256r1 / ?X448:?secp384r1:?secp521r1 / ?ffdhe2048:?ffdhe3072
+</pre>
+
+<p> Caution: It is typically best to just use the compiled-in default
+OpenSSL group settings, by setting "tls_config_file = none". Overly
+strict system-wide TLS settings will conflict with Postfix's
+opportunistic TLS, where being less restrictive is better than
+downgrading to cleartext SMTP. </p>
+
 <p> This feature is available in Postfix &ge; 3.9, 3.8.1, 3.7.6,
 3.6.10, and 3.5.20. </p>
 
@@ -19272,6 +19519,9 @@ signature validation by later mail system will not depend on how
 that mail system handles those stray characters in an
 implementation-dependent manner. </p>
 
+<p> Note: this feature is disabled with "receive_override_options =
+no_header_body_checks". </p>
+
 <p> This feature is available in Postfix &ge; 3.9, 3.8.5, 3.7.10,
 3.6.14, and 3.5.24. </p>
 
@@ -19301,3 +19551,738 @@ announce 8BITMIME support, or when a message line exceeds the SMTP
 length limit. </p>
 
 <p> This feature is available in Postfix &ge; 3.9. </p>
+
+%PARAM smtp_tlsrpt_enable no
+
+<p> Enable support for RFC 8460 TLSRPT notifications. A mail receiving
+domain can publish a TLSRPT policy in DNS, to request periodic
+summaries of successful and failed SMTP over TLS connections to
+their MX servers. This feature requires that Postfix is built
+with a TLSRPT supporting library. </p>
+
+<p> See TLSRPT_README for configuration examples and additional
+requirements for MTA-STS smtp_tls_policy_maps plugins. </p>
+
+<p> This feature is available in Postfix &ge; 3.10. </p>
+
+%PARAM smtp_tlsrpt_socket_name
+
+<p> The pathname of a UNIX-domain datagram socket that is managed
+by a local TLSRPT reporting service. This parameter must specify a
+pathname (absolute, or relative to $queue_directory) when
+"smtp_tlsrpt_enable = yes". </p>
+
+<p> See TLSRPT_README for configuration examples and additional
+requirements for MTA-STS smtp_tls_policy_maps plugins. </p>
+
+<p> This feature is available in Postfix &ge; 3.10. </p>
+
+%PARAM smtp_tlsrpt_skip_reused_handshakes Postfix &ge; 3.11: no, Postfix 3.10: yes
+
+<p> When set to "yes", report the TLSRPT status only for "new" TLS
+sessions. When set to "no", also report the TLSRPT status for TLS
+protocol handshakes that reuse a previously-negotiated TLS session.
+</p>
+
+<p> Note: if an SMTP over TLS connection is reused, there is no
+second etc. TLS handshake to report. </p>
+
+<p> This feature is available in Postfix &ge; 3.10. </p>
+
+%PARAM lmtp_tls_enforce_sts_mx_patterns yes
+
+<p> See smtp_tls_enforce_sts_mx_patterns. </p>
+
+<p> This feature is available in Postfix &ge; 3.10.5. </p>
+
+%PARAM smtp_tls_enforce_sts_mx_patterns yes
+
+<p> Transform the TLS policy from an STS policy plugin: connect to
+an MX host only if its name matches any STS policy MX host pattern,
+and match the server certificate against the MX hostname. This
+setting takes effect only when an STS policy plugin has TLSRPT
+support enabled, so that it forwards STS policy attributes to
+Postfix. This works even if Postfix TLSRPT support is disabled at
+build time or at runtime. </p>
+
+<p> Without the above configuration settings for Postfix and STS
+plugins, the old behavior stays in effect: connect to any MX host
+listed in DNS, and match a server certificate against any STS policy
+MX host pattern. </p>
+
+<p> This feature is available in Postfix &ge; 3.10.5. </p>
+
+%PARAM full_name_encoding_charset utf-8
+
+<p> The character set name (also called "charset") that Postfix
+will output when it automatically generates an RFC 2047 encoded
+full name. Encoding non-ASCII full names can avoid the need to use
+SMTPUTF8, and therefore can avoid incompatibility with sites that
+do not support SMTPUTF8. </p>
+
+<p> The encoded names look like "=?charset?q?gibberish?=" with
+quoted-printable encoding, or "=?charset?b?gibberish?=" with base64
+encoding. Postfix uses quoted-printable encoding for a full name
+that is short or mostly printable ASCII, and uses base64 otherwise.
+</p>
+
+<p> Background: when a message without a From: header is submitted
+with the Postfix sendmail(1) command, the Postfix cleanup(8) daemon
+will add a From: header and will try to use the sender's full name
+specified with the Postfix sendmail(1) "-F" option, with the Postfix
+sendmail(1) "NAME" environment variable, or with the GECOS field
+in the UNIX password database. In the latter case, Postfix will
+replace the "&amp;" character with the login name, with a lowercase
+ASCII first character converted to uppercase. </p>
+
+<p> NOTE: Postfix does not convert between character sets. The
+full_name_encoding_charset parameter specifies the character set
+of the full name in the Postfix sendmail "-F" option, in the Postfix
+sendmail "NAME" environment variable, or in the GECOS field of the
+UNIX password database. The parameter value is also part of the
+encoded full name, and informs a Mail User Agent how to display the
+decoded gibberish. </p>
+
+<p> Specify a valid character set name such as "utf-8" or "iso-8859-1
+(specify the latter for full names that use the Latin1 encoding).
+The character set name is case insensitive. When a character set
+name violates RFC 2047 syntax, Postfix will log a warning and will
+skip the full name. </p>
+
+<p> This feature is available in Postfix &ge; 3.10. </p>
+
+%PARAM socketmap_max_reply_size 100000
+
+<p> The maximum allowed reply size from a socketmap server, not
+including the netstring encapsulation. </p>
+
+<p> This feature is available in Postfix &ge; 3.10. </p>
+
+%PARAM tls_required_enable yes
+
+<p> Enable support for the "TLS-Required: no" message header, defined
+in RFC 8689. By adding this header to a message, a sender requests
+no enforcement of TLS policy. This disables TLS policy lookup, and
+limits the Postfix SMTP client
+TLS security level to "may", that is, do not verify remote SMTP
+server certificates, and fall back to plaintext if TLS is unavailable.
+If a message contains a "TLS-Required: no" header, then Postfix 
+will add that header to a delivery status notification for that 
+message. </p>
+
+<p> Note: the ESMTP REQUIRETLS option overrides the "TLS-Required:
+no" message header.  </p>
+
+<p> This feature is available in Postfix &ge; 3.10. </p>
+
+%PARAM requiretls_enable yes
+
+<p> Enable support for the ESMTP verb "REQUIRETLS" in the "MAIL
+FROM" command. As defined in RFC 8689, when a message specifies
+REQUIRETLS: </p>
+
+<ul>
+
+<li> <p> deliveries with SMTP or LMTP must use a TLS connection, </p>
+
+<li> <p> to a securely looked up MX server (e.g., DNSSEC or MTA-STS),
+</p>
+
+<li> <p> with a matched server certificate (Postfix SMTP or LMTP
+client TLS security levels "secure", "verify", "fingerprint",
+dane-only, or opportunistic "dane"), </p>
+
+<li> <p> and the server must announce "REQUIRETLS" support after
+the STARTTLS handshake. </p>
+
+</ul>
+
+<p> When delivering a message that specifies REQUIRETLS, the Postfix
+SMTP client will try one or more servers, limited by the
+smtp_mx_address_limit and smtp_mx_session_limit parameters, until
+it finds an MX server that satisfies the above requirements. If
+such a server is not found, the Postfix SMTP or LMTP client returns
+the message as undeliverable. </p>
+
+<p> Notes: </p>
+
+<ul>
+
+<li> <p> With the Postfix SMTP or LMTP clients, REQUIRETLS enforcement
+is controlled with smtp_requiretls_policy or lmtp_requiretls_policy. It
+is initially not enforced for deliveries to local servers, including
+LMTP message stores and local content filters. </p>
+
+<li> <p> The ESMTP REQUIRETLS option overrides the "TLS-Required:
+no" message header. </p>
+
+</ul>
+
+<p> This feature is available in Postfix &ge; 3.11. </p>
+
+%PARAM requiretls_redact_dsn yes
+
+<p> When sending a delivery status notification for an original
+message received with the REQUIRETLS option, do not send the original
+message body (as if that message was received with "RET=HDRS") and
+do not enforce REQUIRETLS (as if that message was received without
+REQUIRETLS). For a detailed discussion see RFC 8689 section 5. </p>
+
+<p> Note: the 'reverse' path for sending a delivery status notification
+may differ from the 'forward' path for receiving the original message. 
+Not every hop in the reverse path may support REQUIRETLS, even
+though every hop in the forward path supported it. The setting
+"requiretls_redact_dsn = no" may therefore result in the loss of a
+delivery status notification. </p>
+
+%PARAM smtp_requiretls_policy see 'postconf -d smtp_requiretls_policy' output
+
+<p> How the Postfix SMTP and LMTP client will enforce REQUIRETLS
+for messages received with the REQUIRETLS option. Policy examples
+for SMTP and LMTP are at the end. </p>
+
+<ul>
+
+<li> <p> Specify a list of items, separated with whitespace or
+comma; continue a long line by starting the next line with whitespace.
+</p>
+
+<li> <p> Each item must be an action (see below), or a type:table
+lookup table that must return an action (it must not return a
+type:table). </p>
+
+<li> <p> In the text that follows, the TLS next-hop destination for
+TCP connections is the recipient domain by default, but this can
+be overruled with destinations specified with transport_maps,
+relayhost, content_filter, or other routing features. The next-hop
+destination for LMTP over UNIX-domain connections is always the
+value of myhostname. </p>
+
+<li> <p> A type:table lookup table is searched with the TLS next-hop
+destination (without any [ ], <i>:service</i>, or <i>:port</i>).
+A non-ASCII next-hop destination is converted into ASCII form
+(Punycode) before making a policy query; lookup tables must answer
+ASCII-form queries. </p>
+
+<li> <p> A fixed-string table (such as hash:, btree:, or lmdb:) is
+also searched with the next-hop ".parent" domains (in a table key,
+prepend a '.' to a parent domain name). These ".parent" domain
+queries are not made with pattern-based lookup tables such as regexp:
+or pcre: or with socketmap: or tcp: tables.  </p>
+
+</ul>
+
+<p> Supported actions, assuming that TLS feature status logging is
+enabled with "smtp_log_tls_feature_status = yes" (the default): </p>
+
+<dl>
+
+<dt> <b> enforce </b> </dt> <dd> <p> Skip servers that do not support
+STARTTLS, skip connections without a server certificate match, and
+skip servers that don't support REQUIRETLS after STARTTLS. </p> <p>
+If a suitable server is found, request REQUIRETLS, deliver the
+message, and log "<tt>tls=<i>level</i>/requiretls</tt>" in delivery
+status logging, where <tt><i>level</i></tt> shows the current SMTP
+client TLS security level. </p> <p> If no suitable server is found,
+return the message as undeliverable and log a policy violation
+"<tt>tls=<i>level</i>/!requiretls:nocertmatch</tt>",
+"<tt>tls=<i>level</i>/!requiretls:noencryption</tt>", or
+"<tt>tls=<i>level</i>/!requiretls:nostarttls</tt>", as described
+under smtp_log_tls_feature_status. </p> <p> NOTE: this is also used
+implicitly when no REQUIRETLS policy match is found. </p> </dd>
+
+<dt> <b> opportunistic+starttls </b> </dt> <dd> <p> Skip servers
+that don't announce STARTTLS support, but do not require a server
+certificate match or remote REQUIRETLS support. </p> <p> If a
+suitable server is found, send REQUIRETLS if that server supports
+REQUIRETLS and log "<tt>tls=<i>level</i>/requiretls</tt>" or
+"<tt>tls=<i>level</i>/requiretls:nomatch</tt>" in delivery status
+logging, or simply deliver the message as if the sender did not
+request REQUIRETLS and log "<tt>tls=<i>level</i>/requiretls:none</tt>,
+where <tt><i>level</i></tt> shows the current SMTP client TLS
+security level. </p> <p> If no suitable server is found, return the
+message as undeliverable and log a policy violation
+"<tt>tls=<i>level</i>/!requiretls:noencryption</tt>" or
+"<tt>tls=<i>level</i>/!requiretls:nostarttls</tt>" as described
+under smtp_log_tls_feature_status. </p> <p> This relaxed policy can
+be appropriate for an outbound perimeter MTA, when forwarding
+messages from internal systems to the Internet, at a time that many
+domains support TLS but have no DANE or MTA-STS policies. </p> </dd>
+
+<dt> <b> opportunistic </b> </dt> <dd> <p> Do not require STARTTLS,
+a server certificate match, or remote REQUIRETLS support. </p> <p>
+Request REQUIRETLS if the server supports both STARTTLS and REQUIRETLS
+and log "<tt>tls=<i>level</i>/requiretls</tt>" or
+"<tt>tls=<i>level</i>/requiretls:nomatch</tt>" in delivery status
+logging, otherwise simply deliver the message as if the sender did
+not request REQUIRETLS and log "<tt>tls=<i>level</i>/requiretls:none</tt>,
+where <tt><i>level</i></tt> shows the current SMTP client TLS
+security level. </p> <p> This REQUIRETLS policy is non-intrusive,
+because there can be no REQUIRETLS policy violation. </p> <p> This
+weak policy can be appropriate for an inbound perimeter MTA, when
+forwarding messages from the Internet to internal servers or content
+filters that may not support STARTTLS or REQUIRETLS, using internal
+connections instead of the public Internet. This setting may also
+be useful for an outbound MTA to discover what destinations support
+some form of REQUIRETLS without risking mail delivery problems.
+</p> </dd>
+
+<dt> <b> disable </b> </dt> <dd> <p> Disable REQUIRETLS support.
+Deliver all messages as if the sender did not request REQUIRETLS.
+This may be used as a last-resort workaround when a server announces
+REQUIRETLS support, but the support is inoperable. </p></dd>
+
+</dl>
+
+<p> Notes: </p>
+
+<ul> 
+
+<li> <p> To match any name below the domain "example.com" specify
+a table entry with the storage key ".example.com" in type:table
+lookup tables that need an exact match. This is appropriate, for
+example, with hash:, btree: or lmdb:. </p>
+
+<li> <p> Do not specify a match pattern for ".domain" with regexp:,
+pcre:, socketmap:, or tcp:, as smtp_requiretls_policy will
+not query those tables with that form. </p>
+
+</ul>
+
+<p> SMTP client examples. See REQUIRETLS_README for discussion. </p>
+
+<ul>
+
+<li> <p> The simplest policy: when a sender requests REQUIRETLS,
+request REQUIRETLS when an external or internal server supports
+both STARTTLS and REQUIRETLS (lines 4, 5), and enforce a TLS
+certificate match only if the destination publishes a DANE or STS
+policy (line 3). When the sender requests REQUIRETLS, and an external
+or internal server does not support both STARTTLS and REQUIRETLS,
+simply deliver the message as if the sender did not request REQUIRETLS
+(lines 4, 5). </p>
+<pre>
+1 /etc/postfix/main.cf:
+2     smtp_tls_security_level = may
+3     smtp_tls_policy_maps = ...dane/sts plugin...
+4     smtp_requiretls_policy = opportunistic
+5     lmtp_requiretls_policy = opportunistic
+</pre>
+
+<li> <p> The default SMTP client REQUIRETLS policy (lines 4-12):
+when a sender requests REQUIRETLS, require that an external server
+supports STARTTLS and REQUIRETLS, and require that its server
+certificate matches a DANE or STS policy (lines 3, 12); make
+REQUIRETLS support optional for delivery to internal destinations
+or content filters specified as a symbolic name (lines 5-8) or as
+a numeric address (lines 9-11). An internationalized domain name
+must be specified in ASCII form (lines 6-7); the default policy
+below uses ${domain_to_ascii{$mydomain}} which returns $mydomain
+when the domain name contains only ASCII characters, and which
+returns Punycode (<tt>xn--mumble</tt>) when $mydomain contains
+non-ASCII. Note: if you specify a domain list outside main.cf, then
+the automatic $<i>name</i> expansions and Punycode conversions will
+not happen, and you will need to enter explicit ASCII domain
+names.</p>
+<pre>
+ 1 /etc/postfix/main.cf:
+ 2     smtp_tls_security_level = may
+ 3     smtp_tls_policy_maps = ...dane/sts plugin...
+ 4     smtp_requiretls_policy =
+ 5         inline:{
+ 6             { ${domain_to_ascii{$mydomain}} = opportunistic }
+ 7             { .${domain_to_ascii{$mydomain}} = opportunistic }
+ 8             { localhost = opportunistic } }
+ 9         cidr:{
+10             { 0.0.0.0/0 opportunistic },
+11             { ::/0 opportunistic } },
+12         enforce
+</pre>
+
+<li> <p> An SMTP client REQUIRETLS policy that is relaxed for
+external destinations (line 12): when a sender requests REQUIRETLS,
+require that an external server supports STARTTLS but enforce a TLS
+certificate match only if the receiver publishes a DANE or STS
+policy (line 3), and do not require that an external server supports
+REQUIRETLS. Copy the above policy for internal destinations or
+content filters (lines 5-11). Again, an internationalized domain
+name must be specified in ASCII form (lines 6-7); the policy uses
+${domain_to_ascii{$mydomain}} which returns $mydomain when the
+domain name contains only ASCII characters, and which returns
+Punycode (<tt>xn--mumble</tt>) when $mydomain contains non-ASCII.
+Note: if you specify a domain list outside main.cf, then the automatic
+$<i>name</i> expansions and Punycode conversions will not happen,
+and you will need to enter explicit ASCII domain names.</p>
+<pre>
+ 1 /etc/postfix/main.cf:
+ 2     smtp_tls_security_level = may
+ 3     smtp_tls_policy_maps = ...dane/sts plugin...
+ 4     smtp_requiretls_policy =
+ 5         inline:{
+ 6             { ${domain_to_ascii{$mydomain}} = opportunistic }
+ 7             { .${domain_to_ascii{$mydomain}} = opportunistic }
+ 8             { localhost = opportunistic } }
+ 9         cidr:{
+10             { 0.0.0.0/0 opportunistic },
+11             { ::/0 opportunistic } },
+12         opportunistic+starttls
+</pre>
+
+<li> <p> As above, with external destinations listed in a separate
+file for easier maintenance. </p>
+<pre>
+/etc/postfix/main.cf:
+    smtp_tls_security_level = may
+    smtp_tls_policy_maps = ...dane/sts plugin...
+    smtp_requiretls_policy =
+        inline:{
+            { ${domain_to_ascii{$mydomain}} = opportunistic }
+            { .${domain_to_ascii{$mydomain}} = opportunistic }
+            { localhost = opportunistic } }
+        cidr:{
+            { 0.0.0.0/0 opportunistic },
+            { ::/0 opportunistic } },
+	hash:/etc/postfix/requiretls-per-site
+	opportunistic+starttls
+</pre>
+<pre>
+/etc/postfix/requiretls-per-site:
+    one.example 	enforce
+    two.example 	enforce
+    three.example	opportunistic
+    ...
+</pre>
+
+</ul>
+
+<p>
+LMTP client examples. See REQUIRETLS_README for discussion.
+</p>
+
+<ul>
+
+<li> <p> The default LMTP client REQUIRETLS policy: when a sender
+requests REQUIRETLS, request REQUIRETLS if the server supports
+REQUIRETLS, otherwise deliver the message as if the sender did not
+request REQUIRETLS. Note: with deliveries over a UNIX-domain socket,
+the next-hop destination for lmtp_requiretls_policy lookups will
+be the myhostname parameter value. </p>
+<pre>
+/etc/postfix/main.cf:
+    lmtp_requiretls_policy = opportunistic
+</pre>
+
+</ul>
+
+<p> This feature is available in Postfix &ge; 3.11. </p>
+
+%PARAM lmtp_requiretls_policy opportunistic
+
+<p> The LMTP-specific version of the smtp_requiretls_policy
+configuration parameter. See there for details. </p>
+
+<p> This feature is available in Postfix &ge; 3.11. </p>
+
+%PARAM lmtp_log_tls_feature_status yes
+
+<p> The LMTP-specific version of the smtp_log_tls_feature_status
+configuration parameter. See there for details. </p>
+
+<p> This feature is available in Postfix &ge; 3.11. </p>
+
+%PARAM smtp_log_tls_feature_status yes
+
+<p> Enable logging of TLS feature information in delivery status
+logging. This summarizes how features such as TLS and REQUIRETLS
+were used. A list of examples is at the end of this text. </p>
+
+<ul>
+
+<li> <p> The logging is inserted between the "<tt>delays=a/b/c/d</tt>"
+and the "<tt>dsn=x.y.z, status=...</tt>" information. </p>
+
+<li> <p> The general format is "<tt>tls=feature/feature/...</tt>".
+See below for examples. </p>
+
+<li> <p> The first feature name is the TLS security level:
+'<tt>none</tt>', '<tt>may</tt>', '<tt>encrypt</tt>', etc.  Other
+features are shown only if activated. The REQUIRETLS extension's
+feature name is '<tt>requiretls</tt>'. </p>
+
+<li> <p> When a '<tt>:<i>downgrade-level</i></tt>' is appended to
+a feature name, the feature was downgraded to the indicated level.
+A downgrade-level <tt><i>none</i></tt> indicates that the feature
+was unavailable. The result of a downgrade may violate a strict
+policy, but may still be compliant with a permissive policy. </p>
+
+<li> <p> When "<tt>!</tt>" is prepended to a feature, the policy
+for that feature was violated and the connection was not used.
+</p>
+
+<li> <p> When "?" is appended to a feature, the policy for that
+feature was undecided. This is typically the result of a lost
+connection or an incorrect configuration. </p>
+
+</ul>
+
+<p> Examples for TLS security levels: </p>
+
+<dl>
+
+<dt> tls=none </dt> <dd> A connection that did not use TLS. </dd>
+
+<dt> tls=may </dt> <dd> Opportunistic TLS. The connection was used
+after a successful TLS handshake. </dd>
+
+<dt> tls=may? </dt> <dd> Opportunistic TLS. The status was undecided
+because no connection was made, or no server could be reached. </dd>
+
+<dt> tls=may:none </dt> <dd> The client was willing to use TLS, but
+the remote server did not support STARTTLS, and the connection was
+used in plaintext as permitted by the opportunistic TLS policy. </dd>
+
+<dt> tls=dane </dt> <dd> DANE policy compliant, no downgrade. </dd>
+
+<dt> tls=dane:halfdane </dt> <dd> Opportunistic DANE. The connection
+security was downgraded to '<tt>halfdane</tt>' to indicate that
+mail server records were not DNSSEC-signed. </dd>
+
+<dt> tls=dane:encrypt </dt> <dd> Opportunistic DANE. The connection
+security was downgraded to '<tt>encrypt</tt>' because none of the TLSA
+records were usable. </dd>
+
+<dt> tls=dane? </dt> <dd> DANE policy status was undecided, because the
+connection failed before or in the TLS handshake. </dd>
+
+</dl>
+
+<p> Examples for REQUIRETLS policies (set with smtp_requiretls_policy),
+where "<tt><i>xxx</i></tt>" is a TLS security level: </p>
+
+<dl>
+
+<dt> tls=xxx/requiretls </dt> <dd> 'Enforce' policy compliant.
+After a successful TLS handshake that required a certificate match,
+the remote server announced REQUIRETLS support, and the client sent
+REQUIRETLS.
+
+<dt> tls=xxx/!requiretls:nocertmatch </dt> <dd> 'Enforce' policy
+violation. The connection was not used because the remote server
+certificate did not match as required by the TLS security policy,
+or no connection was made because the TLS security policy disabled
+server certificate matching. </dd>
+
+<dt> tls=xxx/requiretls:nocertmatch </dt> <dd> 'Opportunistic+starttls'
+or 'opportunistic' policy compliant. After a successful TLS handshake
+that did not require a server certificate match, the remote server
+announced REQUIRETLS support, and the client sent REQUIRETLS. </dd>
+
+<dt> tls=xxx/!requiretls:nostarttls </dt> <dd> 'Enforce' or
+'opportunistic+starttls' policy violation. The connection was not
+used because the remote server did not support STARTTLS. </dd>
+
+<dt> tls=xxx/!requiretls:noencryption </dt> <dd> 'Enforce' or
+'opportunistic+starttls' policy violation. No connection was made
+because the TLS security policy disabled encryption. </dd>
+
+<dt> tls=xxx/!requiretls:none </dt> <dd> 'Enforce' policy violation.
+After a successful TLS handshake, the connection was not used because
+the remote server did not support REQUIRETLS. </dd>
+
+<dt> tls=xxx/requiretls:none </dt> <dd> 'Opportunistic+starttls'
+policy compliant. After a successful TLS handshake, the remote
+server did not announce REQUIRETLS support, and the connection was
+used without sending REQUIRETLS. </dd>
+
+<dt> tls=xxx/requiretls:none </dt> <dd> 'Opportunistic' policy
+compliant. The remote server did not announce support for STARTTLS
+or REQUIRETLS, and the connection was used without sending REQUIRETLS.
+</dd>
+
+<dt> tls=xxx/requiretls? </dt> <dd> Policy status was undecided,
+because the connection failed before or in the TLS handshake, or
+no connection was made due to a policy configuration error. </dd>
+
+</dl>
+
+<p> This feature is available in Postfix 3.11 and later. </p> 
+
+%PARAM requiretls_esmtp_header yes
+
+<p> Record the ESMTP REQUIRETLS request in a "Require-TLS-ESMTP:
+yes" message header. This is needed to propagate the REQUIRETLS
+request through an external content filter that is configured with
+smtpd_proxy_filter, with content_filter, or with a FILTER action in
+an SMTPD access(5) table, header_checks(5) or body_checks(5). The
+header is not needed with Milter-based content filters. </p>
+
+<p> This header will be visible to remote and local recipients.  It
+can safely be disabled if a configuration does not use any of the
+above content filters that need the header. </p>
+
+<p> This feature is available in Postfix 3.11 and later. </p>
+
+%PARAM smtpd_hide_client_session no
+
+<p> Do not include SMTP client session information in the Postfix
+SMTP server's Received: message header. </p>
+
+<ul>
+
+<li> <p> The default setting, "smtpd_hide_client_session = no",
+must be used for the port 25 MTA service. It provides information
+that is required by RFC 5321 section 4.4. </p>
+
+<li> <p> The setting "smtpd_hide_client_session = yes" may be used
+for the port 587 and 465 MUA services. This hides the SMTP client
+hostname and IP address, TLS session details, SASL login details,
+and SMTP protocol details. </p>
+
+</ul>
+
+<p> Depending on the number of recipients, a redacted Received:
+header has one of the following forms: </p>
+
+<blockquote>
+<pre>
+Received: by mail.example.com (Postfix) id postfix-queue-id
+        for &lt;user@example.com&gt;; Day, dd Mon yyyy hh:mm:ss tz-offset (zone)
+<br>
+Received: by mail.example.com (Postfix) id postfix-queue-id
+        Day, dd Mon yyyy hh:mm:ss tz-offset (zone)
+</pre>
+</blockquote>
+
+<p> The redacted form hides that a message was received with SMTP,
+and therefore it does not need to provide the FROM clause according
+to RFC 5321 section 4.4. The redacted form still meets RFC 5322
+requirements. </p>
+
+<p> This feature is available in Postfix &ge; 3.10. </p>
+
+%PARAM smtpd_reject_filter_maps
+
+<p> An optional filter that can replace a reject response from the
+Postfix SMTP server itself, or from a program that replies through
+the Postfix SMTP server. The filter is applied before the optional
+reject footers are appended. Typically, the filter will be a regexp:
+or pcre: table, where the left-hand side specifies a pattern, and
+the right-hand side specifies replacement text. </p>
+
+<p> The input is a server response that starts with a 4XX or 5XX
+reply code (see RFC 5321), usually followed by an enhanced status
+code (see RFC 3463) and text. The filter returns replacement text
+or indicates that there was no match. This feature cannot be used
+to change a reject reply into a non-reject one or vice versa. </p>
+
+<p> LIMITATION: smtpd_reject_filter_maps will not replace text that
+was already logged before the Postfix SMTP server replies to the
+remote SMTP client. To help with logfile analysis, the Postfix SMTP
+server logs both the unmodified reply (logged below as "reject
+filter in") and the replacement reply (logged below as "reject
+filter out").
+
+<p> Example: </p>
+
+<pre>
+/etc/postfix/main.cf:
+    smtpd_reject_filter_maps = regexp:/etc/postfix/smtpd_reject_filter
+</pre>
+
+<pre>
+/etc/postfix/smtpd_reject_filter:
+    # Replace soft reject with hard reject.
+    /^451 4(\.6\.0 Alias expansion error)/ 550 5${1}
+</pre>
+
+<pre>
+    # Silly rule for demo purposes.
+    /^(4.+[^.])\.*$/ $1. See you later.
+</pre>
+
+<pre>
+/var/log/maillog:
+    NOQUEUE: reject filter in: 451 4.6.0 Alias expansion error
+    NOQUEUE: reject filter out: 550 5.6.0 Alias expansion error
+</pre>
+
+<p> This feature is available in Postfix &ge; 3.11. </p>
+
+%PARAM domain_to_ascii no default
+
+<p> A function that returns the ASCII representation of its domain
+name argument. If the argument contains only (7-bit) ASCII characters
+(A-label form), then domain_to_ascii{} will return the same value.
+If the argument contains a valid non-ASCII domain name (U-label
+form), then domain_to_ascii{} will return the corresponding Punycode
+(A-label form). Other argument values may result in a program
+start-up error. </p>
+
+<p> Examples: </p>
+
+<ul>
+
+<li> <p> The examples below assume that smtp_requiretls_policy
+contains the default setting: </p>
+<pre>
+smtp_requiretls_policy = inline:{
+    { ${domain_to_ascii{$mydomain}} = opportunistic },
+    { .${domain_to_ascii{$mydomain}} = opportunistic },
+     ...
+</pre>
+
+<li> <p> Example 1: when mydomain contains only ASCII characters,
+domain_to_ascii{} returns the same value. </p>
+<pre>
+# postconf -o 'mydomain=foo.example' -x smtp_requiretls_policy
+smtp_requiretls_policy = inline:{
+    { foo.example = opportunistic },
+    { .foo.example = opportunistic }, 
+     ...
+</pre>
+
+<li> <p> Example 2: when mydomain contains non-ASCII characters,
+domain_to_ascii{} returns the Punycode representation. </p>
+<pre>
+# postconf -o 'mydomain=π.example' -x smtp_requiretls_policy
+smtp_requiretls_policy = inline:{
+    { xn--1xa.example = opportunistic },
+    { .xn--1xa.example = opportunistic },
+     ...
+</pre>
+
+</ul>
+
+<p> This feature is available in Postfix &ge; 3.11. </p>
+
+%PARAM non_empty_end_of_header_action fix_quietly
+
+<p> How the cleanup(8) daemon will process a message when the primary
+message header is terminated with a non-empty line. </p>
+
+<dl>
+
+<dt> <b> fix_quietly </b> </dt> <dd> <p> Default behavior: insert
+an empty line before the erroneous text. This behavior is backwards
+compatible with Postfix &le; 3.10. </p> </dd>
+
+<dt> <b> add_header </b> </dt><dd> <p> Insert a MIME-Error: 
+header and an empty line before the erroneous text. </p>
+<p> Example: </p>
+<pre>
+MIME-Error: message header was not terminated by empty line
+</pre> </dd>
+
+<dt> <b> reject </b> </dt>  <dd> <p> Log the erroneous text and
+reject the message content. </p>
+<p> Example: </p>
+<pre> 
+<i>queueid</i> reject: mime-error message header was terminated
+with non-empty line: <i>erroneous text</i>; from=&lt;<i>sender</i>&gt;
+to=&lt;<i>recipient</i>&gt;
+</pre>
+</dd>
+
+<dl>
+
+<p> This feature is available in Postfix &ge; 3.11. </p>
